@@ -1,0 +1,34 @@
+Data Management Capability (DMC)
+
+1.1 Overview
+
+The DMC is a cpability identified as part of a systems infrastructure.
+The DMC shall be used widely throughout the system for data management providing:
+DMC consider as Server to handle All the kinds of Objects which Input by Clients.
+DMC able to handle all Kind of Objects(Data Element) without knowing the detail about Objects.
+ - Storage of data element (Design the Data Structure for handling data Element)
+ - Allowing to Handle data input by different users (Clients).
+ - Clients possibly to request DMC Server to print out all the Object in System.
+
+1.2 DMC Requirements
+
+ - The DMC capability shall be responsible for data management in the subsystem
+ - The DMC shall provide the following functionality:
+	1) Register data element. (In case New Data element)
+	2) Update data element. (In case Data Element already in System)
+	3) Print out the data element
+ - The DMC should allow storage (and management) of different types of data elements for each user
+ - The DMC No need to redesign to handle any new Type of Data element
+
+1.3 Questions
+
+ - Define the Data Structure of the DMC Server.
+ - Define the Class for Data Element.
+ - Explain your design to handle:
+	1) How DMC knows if the Data Element exists in System or not.
+	2) How DMC print out Data Element without knowing the Data Element.
+	3) How to make sure all Clients are access to the same DMC Server.
+ - Provide a simple test scenario for each requirement
+
+Note: make and validate analysis/design assumptions for each step
+Data Element can be Mobile Phone, TV, Person, Desktop, Car, Bus...
