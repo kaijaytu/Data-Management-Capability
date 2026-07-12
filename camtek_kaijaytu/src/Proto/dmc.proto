@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+option csharp_namespace = "DMC.Grpc";
+
+package dmc;
+
+// DMC Service — full gRPC interface for Data Management Capability
+service DMCService {
+  // Unary: Register a single Data Element
+  rpc Register (RegisterRequest) returns (RegisterResponse);
+
+  // Unary: Update an existing Data Element
+  rpc Update (UpdateRequest) returns (UpdateResponse);
+
+  // Unary: Print a single Data Element by key
+  rpc Print (PrintRequest) returns (PrintResponse);
+
+  // Server streaming: Print all Data Elements
+  rpc PrintAll (PrintAllRequest) returns (stream DataElementMessage);
+
+  // Client streaming: Batch register multiple Data Elements
+  rpc BatchRegister (stream RegisterRequest) returns (BatchRegisterResponse);
+
+  // Unary: Get element count
+  rpc GetCount (Empty) returns (CountResponse);
+
+  // Unary: Check if element exists
+  rpc Contains (ContainsRequest) returns (ContainsResponse);
+}
+
+message Empty {}
+
+message KeyValuePair {
+  string key = 1;
+  string value = 2;
+}
+
+message RegisterRequest {
+  string type = 1;
+  repeated KeyValuePair properties = 2;
+  string key_property = 3;
+}
+
+message RegisterResponse {
+  bool success = 1;
+  string generated_key = 2;
+  string message = 3;
+}
+
+message UpdateRequest {
+  string type = 1;
+  repeated KeyValuePair properties = 2;
+  string key_property = 3;
+}
+
+message UpdateResponse {
+  bool success = 1;
+  string key = 2;
+  string message = 3;
+}
+
+message PrintRequest {
+  string key = 1;
+}
+
+message PrintResponse {
+  bool found = 1;
+  string display = 2;
+}
+
+message PrintAllRequest {}
+
+message DataElementMessage {
+  string key = 1;
+  string type = 2;
+  repeated KeyValuePair properties = 3;
+  string display = 4;
+}
+
+message BatchRegisterResponse {
+  int32 total_received = 1;
+  int32 total_registered = 2;
+  int32 total_updated = 3;
+  repeated string keys = 4;
+}
+
+message ContainsRequest {
+  string key = 1;
+}
+
+message ContainsResponse {
+  bool exists = 1;
+}
+
+message CountResponse {
+  int32 count = 1;
+}
