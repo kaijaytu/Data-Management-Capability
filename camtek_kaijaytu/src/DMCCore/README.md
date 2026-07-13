@@ -10,8 +10,8 @@ Core server logic — the Singleton DMC Server that manages all Data Elements.
 
 | File | Type | Purpose |
 |------|------|---------|
-| `DMCServer.cs` | Class | Singleton server with Register/Update/Print operations |
-
+| `DMCServer.cs` | Class | Singleton server with Register/Update/Print operations || `DMCGrpcService.cs` | Class | gRPC service implementation (maps RPCs to DMCServer) |
+| `DMCClient.cs` | Class | Interactive gRPC client (connects to remote server) |
 ## DMCServer
 
 **Pattern**: Singleton (thread-safe, double-checked locking)
@@ -57,6 +57,35 @@ PrintAll():
 ```
 
 The server never knows what type the element is. It only uses the interface methods.
+
+## DMCGrpcService
+
+**Inherits**: `DMCService.DMCServiceBase` (generated from `dmc.proto`)
+
+Maps gRPC RPC calls to `DMCServer` operations:
+
+| RPC | Type | Delegates To |
+|-----|------|-------------|
+| `Register` | Unary | `DMCServer.Register()` |
+| `Update` | Unary | `DMCServer.Update()` |
+| `Print` | Unary | `DMCServer.Get()` → `ToDisplayString()` |
+| `PrintAll` | Server streaming | `DMCServer.GetAll()` → stream each element |
+| `BatchRegister` | Client streaming | Read stream → `Register()`/`Update()` per element |
+| `GetCount` | Unary | `DMCServer.Count` |
+| `Contains` | Unary | `DMCServer.Contains()` |
+
+## DMCClient
+
+Interactive console client that connects to a running DMC gRPC server.
+
+**Commands**: `register`, `update`, `print`, `printall`, `batch`, `count`, `contains`, `help`, `exit`
+
+```text
+DMCClient
+├── _client: DMCServiceClient     ← gRPC stub
+├── _channel: GrpcChannel         ← Connection to server
+└── RunAsync()                    ← Interactive command loop
+```
 
 ### Singleton Guarantee
 

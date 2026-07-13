@@ -57,6 +57,9 @@ exit
 # Build + Deploy + Run (as user, prompts for root password at deploy)
 ./scripts/pipeline_start.sh
 
+# Run tests (as user, after build)
+./scripts/test/test.sh
+
 # Undeploy + Clean (as user, prompts for root password at undeploy)
 ./scripts/pipeline_stop.sh
 
@@ -72,6 +75,9 @@ su - root
 | `pipeline_install.sh` | Install all system dependencies | root |
 | `pipeline_start.sh` | Build → Deploy → Run (auto switches to root for deploy) | user |
 | `pipeline_stop.sh` | Undeploy → Clean (auto switches to root for undeploy) | user |
+
+> **Note**: `pipeline_start.sh` accepts optional arguments:
+> - `./scripts/pipeline_start.sh [deploy_dir] [port]` (defaults: `/opt/dmc` `5050`)
 | `pipeline_uninstall.sh` | Remove all installed dependencies | root |
 
 ### Manual Steps: Windows (Win10 / Win11)
@@ -90,11 +96,12 @@ scripts\setup\uninstall_deps.bat        &REM Remove installed dependencies
 # Prerequisites
 chmod +x scripts/setup/*.sh scripts/build/*.sh scripts/deploy/*.sh scripts/test/*.sh
 
-# Full Install → Build → Deploy
+# Full Install → Build → Deploy → Test
 ./scripts/setup/install_deps_rhel.sh       # Install dotnet, cmake, gcc-c++
 ./scripts/build/build_rhel.sh              # Build C++ and C#
 ./scripts/deploy/deploy_rhel.sh [dir]      # Deploy to /opt/dmc
 /opt/dmc/run.sh                            # Run
+./scripts/test/test.sh                     # Run all tests
 
 # Full Undeploy → Clean → Uninstall
 ./scripts/deploy/undeploy_rhel.sh [dir]    # Remove deployed files
@@ -163,6 +170,27 @@ Deploys built binaries to a target directory (default `/opt/dmc`):
 ### deploy/undeploy_rhel.sh
 
 Removes the deployment directory. Prompts for confirmation before deleting.
+
+### test/test.sh
+
+Runs the complete DMC test suite on Linux (RHEL 9.2):
+
+1. **C++ Fault Injection Tests** — Compiles and runs `test_main.cpp` against `libHardwareLogic.so`
+   - Null pointer handling
+   - Invalid buffer/data sizes
+   - Operations in illegal states (before init, after shutdown)
+   - `HW_GetLastError` thread safety (50 threads × 10,000 iterations)
+2. **C# Concurrency Stress Tests** — Builds and runs `HardwareLogicConcurrencyTests.cs`
+   - 100 concurrent threads performing parallel read/write
+   - Init/Shutdown race conditions
+   - Read storm, throughput measurement
+   - Re-initialization cycle (1000×)
+
+Returns exit code `0` if all tests pass, `1` otherwise.
+
+### test/test.bat
+
+Runs the C# concurrency stress tests on Windows. Requires `HardwareLogic.dll` (or `.so`) to be accessible via `PATH`.
 
 ## Windows Script Details
 

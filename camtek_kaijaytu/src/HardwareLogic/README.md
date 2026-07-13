@@ -33,7 +33,17 @@ All functions are exported as `extern "C"` for P/Invoke compatibility.
 | `HW_ReadData` | `int (id, buf, size)` | Read element data into buffer. Returns bytes read. |
 | `HW_WriteData` | `int (id, data, size)` | Write element data. Returns 0 on success. |
 | `HW_RunDiagnostics` | `int ()` | Run self-test. Returns 0 on pass. |
-| `HW_GetLastError` | `const char* ()` | Returns last error message string |
+| `HW_GetLastError` | `const char* ()` | Returns last error message (thread-safe snapshot) |
+
+### Error Codes
+
+| Code | Meaning |
+|------|--------|
+| `0` | Success |
+| `-1` | Operation failed (not ready, not found, etc.) |
+| `-2` | Buffer too small |
+| `-3` | Null pointer argument |
+| `-4` | Invalid buffer/data size (zero or negative) |
 
 ## Internal Design
 
@@ -49,6 +59,8 @@ All functions are exported as `extern "C"` for P/Invoke compatibility.
 ```
 
 - **Thread safety**: All functions lock `g_mutex` before accessing shared state
+- **`HW_GetLastError`**: Uses `thread_local` buffer to return a safe snapshot, preventing pointer invalidation from concurrent writes
+- **Input validation**: Null pointer checks (return `-3`) and size validation (return `-4`) are performed before acquiring the lock
 - **Data store**: In-memory `unordered_map` simulates hardware storage
 - **Status machine**: Uninitialized → Ready → (operations) → Shutdown
 

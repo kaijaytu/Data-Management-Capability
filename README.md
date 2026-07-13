@@ -19,9 +19,7 @@ This repository contains the architecture, source code, and documentation for th
 ### Design Patterns
 
 * Singleton Pattern — Ensure all clients access the same DMC Server instance.
-* Factory Pattern — Create different Data Element types without modifying existing code.
 * Strategy Pattern — Each Data Element implements its own Print behavior; DMC does not need to know internal details.
-* Observer Pattern — Clients subscribe to Data Element change notifications.
 
 ### Build System
 
@@ -283,10 +281,6 @@ The following assumptions are made and validated for each design step:
   * Register, update, and print Data Elements through a unified interface.
   * Manage object states and lifecycle without knowledge of concrete types.
 
-* Event-driven architecture
-
-  * Support event hooks, notifications, and asynchronous processing.
-
 * Hardware abstraction
 
   * Separate low-level hardware operations from higher-level application logic through a dedicated C++ layer.
@@ -300,10 +294,6 @@ The following assumptions are made and validated for each design step:
 * High-performance hardware control
 
   * Provide deterministic and low-latency interaction with semiconductor equipment.
-
-* Persistent storage
-
-  * Store configuration, runtime state, and operational data.
 
 * Fault handling
 
@@ -329,24 +319,24 @@ The following assumptions are made and validated for each design step:
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Register new element | MobilePhone(id="001", Brand="Apple") | Successfully added, registry count +1 |
-| Register duplicate element | MobilePhone(id="001") again | Routed to Update or returns "already exists" |
-| Register different type | Car(id="002", Make="Toyota") | Successfully added as separate entry |
+| Register new element | `GenericDataElement("MobilePhone", {Brand="Apple", Model="iPhone"}, "Brand")` | Successfully added, Key: `MobilePhone:Apple`, registry count +1 |
+| Register duplicate key | Same type + same key property value | Routed to Update, returns true |
+| Register different type | `GenericDataElement("Car", {Make="Toyota", Year="2024"}, "Make")` | Successfully added as separate entry, Key: `Car:Toyota` |
 
 ### Update Data Element
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Update existing element | Update id="001" Brand to "Samsung" | Property updated successfully |
-| Update non-existing element | Update id="999" | Returns error or routes to Register |
+| Update existing element | Update `MobilePhone:Apple` Brand to "Samsung" | Property updated successfully, returns true |
+| Update non-existing element | Update key `Car:Unknown` | Returns false (element not found) |
 
 ### Print Data Element
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Print single element | Print(id="001") | Outputs: "MobilePhone: Apple..." |
-| Print all elements | PrintAll() | Outputs all registered elements in sequence |
-| Print after update | Print(id="001") after update | Reflects updated values |
+| Print single element | `Print("MobilePhone:Apple")` | Outputs: `[MobilePhone] Brand=Apple, Model=iPhone  (Key: MobilePhone:Apple)` |
+| Print all elements | `PrintAll()` | Outputs all registered elements in sequence |
+| Print after update | `Print("MobilePhone:Apple")` after update | Reflects updated values |
 
 ### Singleton Guarantee
 
@@ -359,8 +349,8 @@ The following assumptions are made and validated for each design step:
 
 | Scenario | Operation | Expected Result |
 |----------|-----------|----------------|
-| Add new type | Create Desktop class, register via Factory | DMC handles it without code change |
-| Print new type | PrintAll() after adding Desktop | Desktop.Print() output included |
+| Add new type | Create `GenericDataElement("Desktop", {...}, "Brand")` and register | DMC handles it without code change |
+| Print new type | `PrintAll()` after adding Desktop | Desktop element output included |
 
 ## Project Structure Overview
 
@@ -383,7 +373,6 @@ This directory contains the main source code and development environment.
 camtek_kaijaytu/
 ├── build/
 ├── docs/
-│   ├── architecture/
 │   └── design/
 ├── src/
 │   ├── Bridge/
@@ -394,8 +383,9 @@ camtek_kaijaytu/
 │   ├── Logger/
 │   └── ThirdParty/
 └── tests/
-    ├── integration/
-    └── unit/
+    ├── test_main.cpp                    # C++ fault injection tests
+    ├── HardwareLogicConcurrencyTests.cs # C# concurrency stress tests
+    └── DMC.Tests.csproj                 # .NET test project
 ```
 
 ### Source Code
@@ -407,7 +397,7 @@ camtek_kaijaytu/
 #### `DMCCore/`
 
 * C# modules responsible for equipment object management, event processing, and application logic.
-* Contains the DMC Server implementation (Singleton, Registry, Factory).
+* Contains the DMC Server implementation (Singleton, Registry) and gRPC service.
 
 #### `Bridge/`
 
@@ -434,29 +424,29 @@ camtek_kaijaytu/
 
 #### `docs/`
 
-Contains system architecture documents and design references.
-
-* `architecture/`
-
-  * High-level system architecture and component diagrams.
+Contains design documents and technical references.
 
 * `design/`
 
-  * Detailed design documents and technical specifications.
+  * Detailed design documents, examples, and technical specifications.
 
 ### Testing
 
 #### `tests/`
 
-Contains automated testing components.
+Contains automated testing for the HardwareLogic native library.
 
-* `unit/`
+* **C++ Fault Injection Tests** (`test_main.cpp`)
 
-  * Unit tests for individual modules (Register, Update, Print, Singleton).
+  * Null pointer handling, invalid buffer sizes, illegal state operations
+  * `HW_GetLastError` thread-safety validation (multi-threaded)
 
-* `integration/`
+* **C# Concurrency Stress Tests** (`HardwareLogicConcurrencyTests.cs`)
 
-  * Integration tests for cross-module communication and system behavior.
+  * 100-thread parallel read/write, Init/Shutdown races
+  * Read storm, throughput measurement, re-initialization cycles
+
+Run all tests: `./scripts/test/test.sh`
 
 ### Build Output
 
@@ -577,7 +567,8 @@ chmod +x build.sh
 * [x] Build hardware abstraction layer
 * [ ] Implement event dispatcher
 * [x] Integrate gRPC communication (code complete, pending RHEL verification)
-* [ ] Add unit tests for each requirement
+* [x] Add fault injection tests (C++ null pointer, buffer overflow, illegal state)
+* [x] Add concurrency stress tests (C# 100-thread parallel R/W, race conditions)
 * [ ] Add integration tests for Client-Server scenarios
 * [ ] Add CI/CD pipeline
 
