@@ -72,6 +72,16 @@ namespace DMC
             // Build and start gRPC host
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseUrls(address);
+
+            // Enable HTTP/2 on plaintext (required for gRPC without TLS)
+            builder.WebHost.ConfigureKestrel(options =>
+            {
+                options.ConfigureEndpointDefaults(listenOptions =>
+                {
+                    listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2;
+                });
+            });
+
             builder.Services.AddGrpc();
 
             var app = builder.Build();
