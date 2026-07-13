@@ -1,5 +1,7 @@
+using Grpc.Core;
 using Grpc.Net.Client;
 using DMC.Grpc;
+using KeyValuePair = DMC.Grpc.KeyValuePair;
 
 namespace DMC.Client
 {
@@ -70,7 +72,7 @@ namespace DMC.Client
                             break;
                     }
                 }
-                catch (Grpc.Core.RpcException ex)
+                catch (RpcException ex)
                 {
                     Console.WriteLine($"  gRPC Error: {ex.Status.Detail}");
                 }

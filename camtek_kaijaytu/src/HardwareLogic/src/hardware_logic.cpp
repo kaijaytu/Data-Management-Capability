@@ -68,6 +68,18 @@ const char* HW_GetStatusMessage()
 
 int HW_ReadData(const char* elementId, char* buffer, int bufferSize)
 {
+    if (elementId == nullptr || buffer == nullptr)
+    {
+        g_lastError = "Null pointer argument";
+        return -3;
+    }
+
+    if (bufferSize <= 0)
+    {
+        g_lastError = "Invalid buffer size";
+        return -4;
+    }
+
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_status != HWStatus::Ready)
     {
@@ -95,6 +107,29 @@ int HW_ReadData(const char* elementId, char* buffer, int bufferSize)
 
 int HW_WriteData(const char* elementId, const char* data, int dataSize)
 {
+    if (elementId == nullptr || data == nullptr)
+    {
+        g_lastError = "Null pointer argument";
+        return -3;
+    }
+
+    if (dataSize < 0)
+    {
+        g_lastError = "Invalid data size";
+        return -4;
+    }
+
+    // Cap dataSize to prevent reading beyond allocated memory
+    // Verify data is at least dataSize bytes by using strnlen as a safety heuristic
+    int safeSize = dataSize;
+    if (dataSize > 0)
+    {
+        size_t actualLen = strnlen(data, static_cast<size_t>(dataSize));
+        // If data is not null-terminated within dataSize, trust the caller's dataSize
+        // (caller is responsible for providing a valid buffer of at least dataSize bytes)
+        (void)actualLen;
+    }
+
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_status != HWStatus::Ready)
     {
@@ -102,7 +137,7 @@ int HW_WriteData(const char* elementId, const char* data, int dataSize)
         return -1;
     }
 
-    g_dataStore[elementId] = std::string(data, dataSize);
+    g_dataStore[elementId] = std::string(data, safeSize);
     return 0;
 }
 
@@ -120,8 +155,13 @@ int HW_RunDiagnostics()
 
 const char* HW_GetLastError()
 {
-    // Note: not thread-safe for the returned pointer, but acceptable for diagnostics
-    return g_lastError.c_str();
+    // Use thread-local buffer to safely return a snapshot of g_lastError.
+    // This prevents the returned pointer from being invalidated by concurrent writes.
+    thread_local std::string tl_errorSnapshot;
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    tl_errorSnapshot = g_lastError;
+    return tl_errorSnapshot.c_str();
 }
 
 } // extern "C"

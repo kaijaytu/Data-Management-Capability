@@ -2,6 +2,7 @@ using Grpc.Core;
 using DMC.Common;
 using DMC.Common.DataElements;
 using DMC.Grpc;
+using KeyValuePair = DMC.Grpc.KeyValuePair;
 
 namespace DMC.Core
 {

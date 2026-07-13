@@ -1,0 +1,19 @@
+# Build outputs
+camtek_kaijaytu/build/
+camtek_kaijaytu/src/bin/
+camtek_kaijaytu/src/obj/
+camtek_kaijaytu/tests/bin/
+camtek_kaijaytu/tests/obj/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# Install manifests
+.dmc_install_manifest
+.dmc_install_manifest_win
