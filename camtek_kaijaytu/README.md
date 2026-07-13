@@ -24,10 +24,12 @@ camtek_kaijaytu/
 ├── docs/                   # Design documents and examples
 │   └── design/examples/    # Archived concrete class examples
 ├── build/                  # Generated build output (not committed)
-└── tests/                  # Automated tests (fault injection + concurrency)
+└── tests/                  # Automated tests (fault injection, concurrency, integration)
     ├── test_main.cpp       # C++ fault injection tests
     ├── HardwareLogicConcurrencyTests.cs  # C# concurrency stress tests
-    └── DMC.Tests.csproj    # .NET test project
+    ├── GrpcIntegrationTests.cs           # gRPC integration tests
+    ├── DMC.Tests.csproj                  # .NET test project (unit/concurrency)
+    └── DMC.IntegrationTests.csproj       # .NET test project (integration)
 ```
 
 ## Execution Modes

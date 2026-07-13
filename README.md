@@ -385,7 +385,9 @@ camtek_kaijaytu/
 └── tests/
     ├── test_main.cpp                    # C++ fault injection tests
     ├── HardwareLogicConcurrencyTests.cs # C# concurrency stress tests
-    └── DMC.Tests.csproj                 # .NET test project
+    ├── GrpcIntegrationTests.cs          # gRPC client-server integration tests
+    ├── DMC.Tests.csproj                 # .NET test project (unit/concurrency)
+    └── DMC.IntegrationTests.csproj      # .NET test project (integration)
 ```
 
 ### Source Code
@@ -445,6 +447,11 @@ Contains automated testing for the HardwareLogic native library.
 
   * 100-thread parallel read/write, Init/Shutdown races
   * Read storm, throughput measurement, re-initialization cycles
+
+* **gRPC Integration Tests** (`GrpcIntegrationTests.cs`)
+
+  * End-to-end client-server Register, Update, Print, PrintAll, BatchRegister
+  * Server streaming, client streaming, error handling
 
 Run all tests: `./scripts/test/test.sh`
 
@@ -569,7 +576,7 @@ chmod +x build.sh
 * [x] Integrate gRPC communication (code complete, pending RHEL verification)
 * [x] Add fault injection tests (C++ null pointer, buffer overflow, illegal state)
 * [x] Add concurrency stress tests (C# 100-thread parallel R/W, race conditions)
-* [ ] Add integration tests for Client-Server scenarios
+* [x] Add integration tests for Client-Server scenarios (gRPC end-to-end)
 * [ ] Add CI/CD pipeline
 
 ## Notes

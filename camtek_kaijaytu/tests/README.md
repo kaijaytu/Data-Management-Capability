@@ -10,7 +10,9 @@ Automated test suite for the DMC HardwareLogic native library.
 |------|----------|---------|
 | `test_main.cpp` | C++ | Fault injection tests — directly calls `libHardwareLogic.so` API |
 | `HardwareLogicConcurrencyTests.cs` | C# | Concurrency stress tests — 100 threads via P/Invoke |
-| `DMC.Tests.csproj` | Project | .NET 8.0 project file for C# tests |
+| `GrpcIntegrationTests.cs` | C# | gRPC integration tests — end-to-end client-server scenarios |
+| `DMC.Tests.csproj` | Project | .NET 8.0 project file for unit/concurrency tests |
+| `DMC.IntegrationTests.csproj` | Project | .NET 8.0 project file for gRPC integration tests |
 
 ## Test Categories
 
@@ -40,11 +42,29 @@ Automated test suite for the DMC HardwareLogic native library.
 | C-09 | Shutdown interrupts read/write | Returns `-1` after shutdown |
 | C-10 | Re-initialization cycle (1000×) | No memory leak, no crash |
 
+### gRPC Integration Tests (`GrpcIntegrationTests.cs`)
+
+| # | Test | Validates |
+|---|------|-----------|
+| T-01 | Register new element | Returns success + correct key |
+| T-02 | Register duplicate key | Routes to Update |
+| T-03 | Contains | Exists / not exists |
+| T-04 | GetCount | Count is correct |
+| T-05 | Print single element | Display string correct |
+| T-06 | Print not found | Returns Found=false |
+| T-07 | Update existing | Properties updated |
+| T-08 | Update non-existing | Returns false |
+| T-09 | PrintAll (server streaming) | Streams all elements |
+| T-10 | BatchRegister (client streaming) | Batch of 3 elements |
+| T-11 | Final count | Total ≥ 4 |
+| T-12 | Error handling | Empty key doesn't crash |
+
 ## How to Run
 
 ### Prerequisites
 
-`libHardwareLogic.so` must be built first (`scripts/build/build_rhel.sh` or `scripts/pipeline_start.sh`).
+- `libHardwareLogic.so` must be built first (`scripts/build/build_rhel.sh` or `scripts/pipeline_start.sh`).
+- For integration tests: DMC Server must be running (`/opt/dmc/run.sh --server --port 5050`).
 
 ### Option 1: Test Script (recommended)
 
