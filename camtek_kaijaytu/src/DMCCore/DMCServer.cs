@@ -1,10 +1,15 @@
 using DMC.Common;
+using DMC.Common.DataElements;
 
 namespace DMC.Core
 {
+    public enum SetAction { Created, Updated, AlreadyExists }
+    public record SetResult(SetAction Action, string Key);
+
     /// <summary>
     /// Singleton DMC Server — centralized data registry for all Data Elements.
-    /// All Clients access the same instance via DMCServer.Instance.
+    /// V2: Schema layer (DefineType) + Data layer (Set/Search/Print).
+    /// Server is responsible for: key generation, identity detection, register/update decisions.
     /// </summary>
     public class DMCServer
     {
@@ -12,10 +17,16 @@ namespace DMC.Core
         private static readonly object _lock = new object();
 
         private readonly Dictionary<string, IDataElement> _registry;
+        private readonly Dictionary<string, List<string>> _typeSchemas;
+        private readonly Dictionary<string, int> _typeCounters;
+        private readonly Dictionary<string, string> _identityIndex;
 
         private DMCServer()
         {
             _registry = new Dictionary<string, IDataElement>();
+            _typeSchemas = new Dictionary<string, List<string>>();
+            _typeCounters = new Dictionary<string, int>();
+            _identityIndex = new Dictionary<string, string>();
         }
 
         public static DMCServer Instance
@@ -36,49 +47,114 @@ namespace DMC.Core
             }
         }
 
-        /// <summary>
-        /// Register a new Data Element. If already exists, routes to Update.
-        /// Uses element.GetKey() as the dictionary key.
-        /// </summary>
-        public bool Register(IDataElement element)
-        {
-            if (element == null)
-                throw new ArgumentNullException(nameof(element));
-
-            string key = element.GetKey();
-            if (string.IsNullOrWhiteSpace(key))
-                throw new ArgumentException("Element key cannot be null or empty.", nameof(element));
-
-            if (_registry.ContainsKey(key))
-            {
-                return Update(element);
-            }
-
-            _registry.Add(key, element);
-            return true;
-        }
+        // =================================================================
+        // Schema Layer
+        // =================================================================
 
         /// <summary>
-        /// Update an existing Data Element. Returns false if not found.
+        /// Define the IdentityKeys schema for a Type. Must be called before Set().
         /// </summary>
-        public bool Update(IDataElement element)
+        public bool DefineType(string type, List<string> identityKeys)
         {
-            if (element == null)
-                throw new ArgumentNullException(nameof(element));
+            if (string.IsNullOrWhiteSpace(type))
+                throw new ArgumentException("Type cannot be empty.", nameof(type));
+            if (identityKeys == null || identityKeys.Count == 0)
+                throw new ArgumentException("IdentityKeys is required.", nameof(identityKeys));
 
-            string key = element.GetKey();
-            if (!_registry.ContainsKey(key))
-            {
+            if (_typeSchemas.ContainsKey(type))
                 return false;
-            }
 
-            _registry[key] = element;
+            _typeSchemas[type] = new List<string>(identityKeys);
             return true;
         }
 
         /// <summary>
-        /// Print a single Data Element by key.
+        /// Get the IdentityKeys schema for a Type. Returns null if not defined.
         /// </summary>
+        public List<string>? GetTypeSchema(string type)
+        {
+            return _typeSchemas.TryGetValue(type, out var schema) ? schema : null;
+        }
+
+        // =================================================================
+        // Data Layer
+        // =================================================================
+
+        /// <summary>
+        /// Set a Data Element. Server decides Create or Update based on identity matching.
+        /// - No key: check identity index → match found = Update, no match = Create
+        /// - With key: explicit update by key
+        /// </summary>
+        public SetResult Set(string type, Dictionary<string, string> properties, string? existingKey = null, bool merge = true)
+        {
+            if (string.IsNullOrWhiteSpace(type))
+                throw new ArgumentException("Type cannot be empty.", nameof(type));
+
+            if (!_typeSchemas.TryGetValue(type, out var identityKeys))
+                throw new InvalidOperationException($"Type '{type}' has no schema. Call DefineType first.");
+
+            foreach (var idKey in identityKeys)
+            {
+                if (!properties.ContainsKey(idKey))
+                    throw new ArgumentException($"IdentityKey '{idKey}' not found in properties.");
+            }
+
+            // Case 1: Explicit update by key
+            if (!string.IsNullOrEmpty(existingKey))
+            {
+                if (!_registry.ContainsKey(existingKey))
+                    return new SetResult(SetAction.Updated, existingKey);
+
+                UpdateProperties(existingKey, properties, merge);
+                UpdateIdentityIndex(existingKey, type, properties, identityKeys);
+                return new SetResult(SetAction.Updated, existingKey);
+            }
+
+            // Case 2: Check identity index for match
+            string identityKey = BuildIdentityKey(type, properties, identityKeys);
+
+            if (_identityIndex.TryGetValue(identityKey, out var matchedKey))
+            {
+                UpdateProperties(matchedKey, properties, merge);
+                return new SetResult(SetAction.Updated, matchedKey);
+            }
+
+            // Case 3: No match → Create new element
+            string newKey = GenerateKey(type);
+            var element = new GenericDataElement(type, new Dictionary<string, string>(properties), newKey);
+            _registry.Add(newKey, element);
+            _identityIndex[identityKey] = newKey;
+            return new SetResult(SetAction.Created, newKey);
+        }
+
+        /// <summary>
+        /// Update properties of an existing element by key.
+        /// </summary>
+        public bool Update(string key, Dictionary<string, string> properties, bool merge = true)
+        {
+            if (!_registry.ContainsKey(key))
+                return false;
+
+            UpdateProperties(key, properties, merge);
+
+            var element = _registry[key];
+            if (_typeSchemas.TryGetValue(element.Type, out var identityKeys))
+            {
+                UpdateIdentityIndex(key, element.Type, properties, identityKeys);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Search for elements matching a filter (subset match via ISearchable).
+        /// </summary>
+        public IEnumerable<IDataElement> Search(string? type, Dictionary<string, string> filters)
+        {
+            return _registry.Values
+                .Where(e => e.Matches(type, filters))
+                .ToList();
+        }
+
         public bool Print(string key)
         {
             if (_registry.TryGetValue(key, out var element))
@@ -89,50 +165,70 @@ namespace DMC.Core
             return false;
         }
 
-        /// <summary>
-        /// Print all Data Elements in the system.
-        /// </summary>
         public void PrintAll()
         {
             foreach (var element in _registry.Values)
-            {
                 element.Print();
-            }
         }
 
-        /// <summary>
-        /// Check if a Data Element exists in the system by key.
-        /// </summary>
-        public bool Contains(string key)
-        {
-            return _registry.ContainsKey(key);
-        }
-
-        /// <summary>
-        /// Get the total count of registered Data Elements.
-        /// </summary>
+        public bool Contains(string key) => _registry.ContainsKey(key);
         public int Count => _registry.Count;
 
-        /// <summary>
-        /// Get a single Data Element by key. Returns null if not found.
-        /// </summary>
         public IDataElement? Get(string key)
         {
             _registry.TryGetValue(key, out var element);
             return element;
         }
 
-        /// <summary>
-        /// Get all Data Elements in the system.
-        /// </summary>
-        public IEnumerable<IDataElement> GetAll()
+        public IEnumerable<IDataElement> GetAll() => _registry.Values.ToList();
+
+        // =================================================================
+        // Internal Helpers
+        // =================================================================
+
+        private string GenerateKey(string type)
         {
-            return _registry.Values.ToList();
+            if (!_typeCounters.ContainsKey(type))
+                _typeCounters[type] = 0;
+            _typeCounters[type]++;
+            return $"{type}:{_typeCounters[type]}";
         }
 
-        /// <summary>
-        /// Reset the server instance (for testing purposes only).
-        /// </summary>
+        private string BuildIdentityKey(string type, Dictionary<string, string> properties, List<string> identityKeys)
+        {
+            var values = identityKeys.Select(k => properties[k]);
+            return $"{type}:{string.Join(":", values)}";
+        }
+
+        private void UpdateProperties(string key, Dictionary<string, string> newProps, bool merge)
+        {
+            if (_registry[key] is GenericDataElement generic)
+            {
+                if (merge)
+                {
+                    foreach (var kvp in newProps)
+                        generic.Properties[kvp.Key] = kvp.Value;
+                }
+                else
+                {
+                    generic.Properties = new Dictionary<string, string>(newProps);
+                }
+            }
+        }
+
+        private void UpdateIdentityIndex(string key, string type, Dictionary<string, string> properties, List<string> identityKeys)
+        {
+            var oldEntry = _identityIndex.FirstOrDefault(kv => kv.Value == key);
+            if (oldEntry.Key != null)
+                _identityIndex.Remove(oldEntry.Key);
+
+            if (_registry.ContainsKey(key) && _registry[key] is GenericDataElement generic)
+            {
+                string identityKey = BuildIdentityKey(type, generic.Properties, identityKeys);
+                _identityIndex[identityKey] = key;
+            }
+        }
+
         internal static void ResetInstance()
         {
             lock (_lock)
