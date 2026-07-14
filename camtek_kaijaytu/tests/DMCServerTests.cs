@@ -645,6 +645,38 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Special Character Tests
+        // =====================================================================
+
+        public void S28_IdentityKeyWithSpecialChars()
+        {
+            Console.WriteLine("=== S-28: IdentityKey with special characters ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Device", new List<string> { "SerialNo" });
+
+            // SerialNo contains colons (like MAC address format)
+            var r1 = server.Set("Device", new Dictionary<string, string>
+                { ["SerialNo"] = "AA:BB:CC:DD", ["Name"] = "Router1" });
+            Assert(r1.Action == SetAction.Created, "Device with colons should be Created");
+
+            // Different serial with colons
+            var r2 = server.Set("Device", new Dictionary<string, string>
+                { ["SerialNo"] = "AA:BB:CC:EE", ["Name"] = "Router2" });
+            Assert(r2.Action == SetAction.Created, "Different serial should be Created");
+            Assert(r2.Key != r1.Key, "Should have different keys");
+
+            // Same serial → should match
+            var r3 = server.Set("Device", new Dictionary<string, string>
+                { ["SerialNo"] = "AA:BB:CC:DD", ["Name"] = "Router1-Updated" });
+            Assert(r3.Action == SetAction.Updated, "Same serial with colons should match");
+            Assert(r3.Key == r1.Key, $"Should update {r1.Key}, got {r3.Key}");
+
+            Assert(server.Count == 2, $"Count should be 2, got {server.Count}");
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -679,6 +711,7 @@ namespace DMC.Tests
             S25_UpdateSchemaCollision();
             S26_UpdateSchemaMissingProperty();
             S27_UpdateSchemaUndefinedType();
+            S28_IdentityKeyWithSpecialChars();
 
             sw.Stop();
 
@@ -694,6 +727,7 @@ namespace DMC.Tests
             Console.WriteLine("    Concurrency S18-S21 100-thread Set, same-identity race, R/W mix, DefineType race");
             Console.WriteLine("    Multi-User S22-S23  owner tracking, search by owner");
             Console.WriteLine("    Migration  S24-S27  schema tighten, collision reject, missing prop, undefined type");
+            Console.WriteLine("    SpecialChr S28      identity matching with colons in property values");
             Console.WriteLine("══════════════════════════════════════════════════════");
         }
 

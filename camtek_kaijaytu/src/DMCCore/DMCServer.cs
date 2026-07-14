@@ -142,7 +142,7 @@ namespace DMC.Core
 
                 // Remove old identity index entries for this Type
                 var oldEntries = _identityIndex
-                    .Where(kv => kv.Key.StartsWith(type + ":"))
+                    .Where(kv => kv.Key.StartsWith(type + "\x1F"))
                     .Select(kv => kv.Key)
                     .ToList();
                 foreach (var key in oldEntries)
@@ -315,10 +315,15 @@ namespace DMC.Core
             return $"{type}:{_typeCounters[type]}";
         }
 
+        /// <summary>
+        /// Build identity index key using Unit Separator (\x1F) as delimiter.
+        /// This avoids collisions when property values contain ':' or other common characters.
+        /// </summary>
         private string BuildIdentityKey(string type, Dictionary<string, string> properties, List<string> identityKeys)
         {
+            const char sep = '\x1F'; // ASCII Unit Separator — never appears in user input
             var values = identityKeys.Select(k => properties[k]);
-            return $"{type}:{string.Join(":", values)}";
+            return $"{type}{sep}{string.Join(sep, values)}";
         }
 
         private void UpdateProperties(string key, Dictionary<string, string> newProps, bool merge)
