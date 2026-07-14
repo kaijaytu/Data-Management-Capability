@@ -245,7 +245,7 @@ namespace DMC.Core
                 if (!string.IsNullOrEmpty(owner))
                     query = query.Where(e => e is GenericDataElement g && g.Owner == owner);
 
-                return query.ToList();
+                return query.Select(CloneElement).ToList();
             }
         }
 
@@ -278,16 +278,34 @@ namespace DMC.Core
         {
             lock (_lock)
             {
-                _registry.TryGetValue(key, out var element);
-                return element;
+                if (_registry.TryGetValue(key, out var element))
+                    return CloneElement(element);
+                return null;
             }
         }
 
-        public IEnumerable<IDataElement> GetAll() { lock (_lock) { return _registry.Values.ToList(); } }
+        public IEnumerable<IDataElement> GetAll() { lock (_lock) { return _registry.Values.Select(CloneElement).ToList(); } }
 
         // =================================================================
         // Internal Helpers
         // =================================================================
+
+        /// <summary>
+        /// Create a deep copy of an element so callers can safely iterate
+        /// Properties without holding the lock.
+        /// </summary>
+        private IDataElement CloneElement(IDataElement element)
+        {
+            if (element is GenericDataElement g)
+            {
+                return new GenericDataElement(
+                    g.Type,
+                    new Dictionary<string, string>(g.Properties),
+                    g.Key,
+                    g.Owner);
+            }
+            return element;
+        }
 
         private string GenerateKey(string type)
         {
