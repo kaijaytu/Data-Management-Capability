@@ -64,9 +64,19 @@ namespace DMC
                 Console.WriteLine($"Hardware init skipped: {ex.Message}");
             }
 
-            // Initialize DMC Server
+            // Initialize DMC Server with commit log (Kafka-style persistence)
+            // Default: ~/.dmc/dmc_commit.log (user home, always writable)
+            // Override: DMC_DATA_DIR=/var/lib/dmc ./DMC --server
+            // TODO: Production deployment should use /var/lib/dmc/ (FHS standard)
+            //       with proper ownership: sudo chown <user> /var/lib/dmc
             var server = DMCServer.Instance;
-            Console.WriteLine($"DMC Server initialized. Elements in system: {server.Count}");
+            string dataDir = Environment.GetEnvironmentVariable("DMC_DATA_DIR")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dmc");
+            Directory.CreateDirectory(dataDir);
+            string logPath = Path.Combine(dataDir, "dmc_commit.log");
+            int replayed = server.EnableCommitLog(logPath);
+            Console.WriteLine($"DMC Server initialized. Elements: {server.Count} (replayed {replayed} log entries)");
+            Console.WriteLine($"Commit log: {logPath}");
             Console.WriteLine();
 
             // Build and start gRPC host

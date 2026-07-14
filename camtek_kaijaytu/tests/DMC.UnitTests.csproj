@@ -15,6 +15,7 @@
     <Compile Include="../src/Common/IDataElement.cs" Link="Core/IDataElement.cs" />
     <Compile Include="../src/Common/DataElements/GenericDataElement.cs" Link="Core/GenericDataElement.cs" />
     <Compile Include="../src/DMCCore/DMCServer.cs" Link="Core/DMCServer.cs" />
+    <Compile Include="../src/DMCCore/CommitLog.cs" Link="Core/CommitLog.cs" />
   </ItemGroup>
 
 </Project>

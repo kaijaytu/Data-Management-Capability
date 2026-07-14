@@ -677,6 +677,166 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Commit Log (Kafka-style Persistence) Tests
+        // =====================================================================
+
+        public void S29_CommitLogWriteAndReplay()
+        {
+            Console.WriteLine("=== S-29: CommitLog Write + Replay (data survives restart) ===");
+            string logPath = Path.Combine(Path.GetTempPath(), $"dmc_test_{Guid.NewGuid():N}.log");
+
+            try
+            {
+                // Phase 1: Create data with commit log
+                DMCServer.ResetInstance();
+                var server1 = DMCServer.Instance;
+                int replayed1 = server1.EnableCommitLog(logPath);
+                Assert(replayed1 == 0, "Fresh log should replay 0 entries");
+
+                server1.DefineType("Car", new List<string> { "VIN" });
+                server1.Set("Car", new Dictionary<string, string>
+                    { ["VIN"] = "ABC-001", ["Make"] = "Toyota", ["Year"] = "2024" }, owner: "alice");
+                server1.Set("Car", new Dictionary<string, string>
+                    { ["VIN"] = "DEF-002", ["Make"] = "Honda", ["Year"] = "2023" }, owner: "bob");
+
+                // Update: same VIN → merge
+                server1.Set("Car", new Dictionary<string, string>
+                    { ["VIN"] = "ABC-001", ["Year"] = "2025", ["Color"] = "Red" }, owner: "alice");
+
+                Assert(server1.Count == 2, $"Phase 1: count should be 2, got {server1.Count}");
+                var (offset, _) = server1.GetLogInfo();
+                Assert(offset > 0, $"Log should have entries, got offset {offset}");
+                Console.WriteLine($"  Phase 1: {server1.Count} elements, {offset} log entries");
+
+                // Phase 2: Simulate restart — reset instance, replay log
+                DMCServer.ResetInstance();
+                var server2 = DMCServer.Instance;
+                int replayed2 = server2.EnableCommitLog(logPath);
+                Assert(replayed2 > 0, $"Should replay entries, got {replayed2}");
+                Assert(server2.Count == 2, $"Phase 2: count should be 2 after replay, got {server2.Count}");
+
+                // Verify data integrity after replay
+                var car1 = server2.Get("Car:1") as GenericDataElement;
+                Assert(car1 != null, "Car:1 should exist after replay");
+                Assert(car1!.Properties["Make"] == "Toyota", "Make should be Toyota");
+                Assert(car1.Properties["Year"] == "2025", "Year should be 2025 (merged)");
+                Assert(car1.Properties["Color"] == "Red", "Color should be Red (merged)");
+                Assert(car1.Owner == "alice", "Owner should be alice");
+
+                var car2 = server2.Get("Car:2") as GenericDataElement;
+                Assert(car2 != null, "Car:2 should exist after replay");
+                Assert(car2!.Properties["Make"] == "Honda", "Make should be Honda");
+
+                Console.WriteLine($"  Phase 2: replayed {replayed2} entries, {server2.Count} elements restored");
+
+                // Phase 3: New data after replay should get correct keys (no collision)
+                var r3 = server2.Set("Car", new Dictionary<string, string>
+                    { ["VIN"] = "GHI-003", ["Make"] = "BMW" }, owner: "charlie");
+                Assert(r3.Action == SetAction.Created, "New car after replay should be Created");
+                Assert(r3.Key == "Car:3", $"Key should be Car:3 (counter synced), got {r3.Key}");
+                Console.WriteLine($"  Phase 3: new element after replay → {r3.Key}");
+            }
+            finally
+            {
+                // Cleanup temp log file
+                if (File.Exists(logPath)) File.Delete(logPath);
+            }
+            Console.WriteLine();
+        }
+
+        public void S30_CommitLogCompaction()
+        {
+            Console.WriteLine("=== S-30: CommitLog Compaction (Kafka-style) ===");
+            string logPath = Path.Combine(Path.GetTempPath(), $"dmc_test_{Guid.NewGuid():N}.log");
+
+            try
+            {
+                DMCServer.ResetInstance();
+                var server = DMCServer.Instance;
+                server.EnableCommitLog(logPath);
+                server.DefineType("Sensor", new List<string> { "DeviceId" });
+
+                // Write 50 updates to the same sensor → 50 log entries for 1 element
+                for (int i = 0; i < 50; i++)
+                {
+                    server.Set("Sensor", new Dictionary<string, string>
+                        { ["DeviceId"] = "SNR-001", ["Temperature"] = $"{20.0 + i * 0.1}" });
+                }
+
+                var (beforeOffset, _) = server.GetLogInfo();
+                Assert(beforeOffset == 51, $"Should have 51 entries (1 DefineType + 50 Sets), got {beforeOffset}");
+
+                // Compact → should keep only latest per key
+                int removed = server.CompactLog();
+                var (afterOffset, _) = server.GetLogInfo();
+
+                Assert(removed > 0, $"Compaction should remove entries, removed {removed}");
+                Assert(afterOffset < beforeOffset, $"After compaction should be smaller: {afterOffset} < {beforeOffset}");
+                Console.WriteLine($"  Before: {beforeOffset} entries, After: {afterOffset} entries, Removed: {removed}");
+
+                // Verify data still correct after compaction
+                DMCServer.ResetInstance();
+                var server2 = DMCServer.Instance;
+                server2.EnableCommitLog(logPath);
+                Assert(server2.Count == 1, $"Should have 1 sensor after compacted replay, got {server2.Count}");
+
+                var sensor = server2.Get("Sensor:1") as GenericDataElement;
+                Assert(sensor!.Properties["Temperature"] == "24.9", $"Temperature should be 24.9 (last update), got {sensor.Properties["Temperature"]}");
+                Console.WriteLine($"  After compaction replay: {server2.Count} element, Temperature={sensor.Properties["Temperature"]}");
+            }
+            finally
+            {
+                if (File.Exists(logPath)) File.Delete(logPath);
+            }
+            Console.WriteLine();
+        }
+
+        public void S31_CommitLogSchemaReplay()
+        {
+            Console.WriteLine("=== S-31: CommitLog Schema + UpdateSchema Replay ===");
+            string logPath = Path.Combine(Path.GetTempPath(), $"dmc_test_{Guid.NewGuid():N}.log");
+
+            try
+            {
+                DMCServer.ResetInstance();
+                var server1 = DMCServer.Instance;
+                server1.EnableCommitLog(logPath);
+
+                server1.DefineType("Person", new List<string> { "Email" });
+                server1.Set("Person", new Dictionary<string, string>
+                    { ["Email"] = "alice@co.com", ["Name"] = "Alice", ["EmployeeId"] = "E001" });
+                server1.Set("Person", new Dictionary<string, string>
+                    { ["Email"] = "bob@co.com", ["Name"] = "Bob", ["EmployeeId"] = "E002" });
+
+                // Update schema: Email → EmployeeId
+                server1.UpdateTypeSchema("Person", new List<string> { "EmployeeId" });
+                var schema1 = server1.GetTypeSchema("Person");
+                Assert(schema1![0] == "EmployeeId", "Schema should be updated to EmployeeId");
+
+                // Replay on new instance
+                DMCServer.ResetInstance();
+                var server2 = DMCServer.Instance;
+                server2.EnableCommitLog(logPath);
+
+                Assert(server2.Count == 2, $"Should have 2 persons after replay, got {server2.Count}");
+                var schema2 = server2.GetTypeSchema("Person");
+                Assert(schema2 != null && schema2[0] == "EmployeeId",
+                    $"Schema should be EmployeeId after replay, got [{string.Join(",", schema2 ?? new())}]");
+
+                // Verify identity works with new schema
+                var r = server2.Set("Person", new Dictionary<string, string>
+                    { ["Email"] = "alice-new@co.com", ["Name"] = "Alice Updated", ["EmployeeId"] = "E001" });
+                Assert(r.Action == SetAction.Updated, "Same EmployeeId should match with new schema");
+                Console.WriteLine($"  Schema replay verified: EmployeeId-based identity works");
+            }
+            finally
+            {
+                if (File.Exists(logPath)) File.Delete(logPath);
+            }
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -712,6 +872,9 @@ namespace DMC.Tests
             S26_UpdateSchemaMissingProperty();
             S27_UpdateSchemaUndefinedType();
             S28_IdentityKeyWithSpecialChars();
+            S29_CommitLogWriteAndReplay();
+            S30_CommitLogCompaction();
+            S31_CommitLogSchemaReplay();
 
             sw.Stop();
 
@@ -728,6 +891,7 @@ namespace DMC.Tests
             Console.WriteLine("    Multi-User S22-S23  owner tracking, search by owner");
             Console.WriteLine("    Migration  S24-S27  schema tighten, collision reject, missing prop, undefined type");
             Console.WriteLine("    SpecialChr S28      identity matching with colons in property values");
+            Console.WriteLine("    CommitLog  S29-S31  write+replay (restart survival), compaction, schema replay");
             Console.WriteLine("══════════════════════════════════════════════════════");
         }
 
