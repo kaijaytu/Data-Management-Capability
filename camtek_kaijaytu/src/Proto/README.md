@@ -57,29 +57,43 @@ gRPC supports 4 communication patterns:
 4. Bidirectional:   Client sends N requests ↔ Server returns N responses
 ```
 
-### DMCService Methods
+### DMCService Methods (V2)
 
 ```protobuf
 service DMCService {
-  rpc Register (RegisterRequest) returns (RegisterResponse);              // Unary
-  rpc Update (UpdateRequest) returns (UpdateResponse);                    // Unary
-  rpc Print (PrintRequest) returns (PrintResponse);                      // Unary
-  rpc PrintAll (PrintAllRequest) returns (stream DataElementMessage);     // Server streaming
-  rpc BatchRegister (stream RegisterRequest) returns (BatchRegisterResponse); // Client streaming
-  rpc GetCount (Empty) returns (CountResponse);                          // Unary
-  rpc Contains (ContainsRequest) returns (ContainsResponse);             // Unary
+  // Schema layer
+  rpc DefineType (DefineTypeRequest) returns (DefineTypeResponse);
+  rpc GetTypeSchema (GetTypeSchemaRequest) returns (GetTypeSchemaResponse);
+  rpc UpdateTypeSchema (UpdateTypeSchemaRequest) returns (UpdateTypeSchemaResponse);
+
+  // Data layer
+  rpc SetElement (SetElementRequest) returns (SetElementResponse);           // Unary
+  rpc Search (SearchRequest) returns (SearchResponse);                       // Unary
+  rpc Print (PrintRequest) returns (PrintResponse);                          // Unary
+  rpc PrintAll (PrintAllRequest) returns (stream DataElementMessage);        // Server streaming
+  rpc BatchSet (stream SetElementRequest) returns (BatchSetResponse);        // Client streaming
+  rpc GetCount (Empty) returns (CountResponse);                              // Unary
+  rpc Contains (ContainsRequest) returns (ContainsResponse);                 // Unary
 }
 ```
 
 | Method | Pattern | Why this pattern? |
 |--------|---------|-------------------|
-| `Register` | Unary | One element in, one result back |
-| `Update` | Unary | Same as Register |
-| `Print` | Unary | Request one element's display string |
-| `PrintAll` | **Server streaming** | Server may have many elements; client receives them one by one without loading all into memory |
-| `BatchRegister` | **Client streaming** | Client sends many elements; server processes them as they arrive, returns summary |
-| `GetCount` | Unary | Simple query |
-| `Contains` | Unary | Simple query |
+| `DefineType` | Unary | One-time schema definition per Type |
+| `UpdateTypeSchema` | Unary | Schema migration with collision validation |
+| `SetElement` | Unary | Single entry point — Server decides Create/Update |
+| `Search` | Unary | Query with filters, returns matching elements |
+| `PrintAll` | **Server streaming** | Many elements; client receives one by one |
+| `BatchSet` | **Client streaming** | Client sends many elements; server processes as they arrive |
+
+### V1 → V2 Changes
+
+| V1 | V2 | Why |
+|----|-----|-----|
+| `Register` + `Update` (2 RPCs) | `SetElement` (1 RPC) | Client shouldn't decide register vs update — Server has the registry |
+| `key_property` in request | `IdentityKeys` in `DefineType` | Identity defined at schema level, not per request |
+| No search | `Search` RPC | Client needs to find data by properties (not just by key) |
+| No owner tracking | `owner` field in responses | Multi-user support — track who created each element |
 
 ### Message Structure Explained
 

@@ -10,82 +10,122 @@ Core server logic — the Singleton DMC Server that manages all Data Elements.
 
 | File | Type | Purpose |
 |------|------|---------|
-| `DMCServer.cs` | Class | Singleton server with Register/Update/Print operations || `DMCGrpcService.cs` | Class | gRPC service implementation (maps RPCs to DMCServer) |
-| `DMCClient.cs` | Class | Interactive gRPC client (connects to remote server) |
-## DMCServer
+| `DMCServer.cs` | Class | Singleton server with Schema (DefineType) + Data (Set/Search/Print) operations |
+| `DMCGrpcService.cs` | Class | gRPC service implementation (maps RPCs to DMCServer) with structured logging |
+| `DMCClient.cs` | Class | Interactive gRPC client with client-id support |
+
+## DMCServer (V2)
 
 **Pattern**: Singleton (thread-safe, double-checked locking)
 
-**Data Structure**: `Dictionary<string, IDataElement>` — shared data pool
+**Architecture**: Two-layer design — Schema layer + Data layer
 
 ```text
 DMCServer (Singleton)
-├── _instance: DMCServer          ← single global instance
-├── _lock: object                 ← thread safety
-└── _registry: Dictionary         ← Key: element.GetKey(), Value: IDataElement
+├── _instance: DMCServer              ← single global instance
+├── _lock: object                     ← thread safety (all public methods)
+├── _typeSchemas: Dictionary          ← Type → IdentityKeys (per-Type schema)
+├── _typeCounters: Dictionary         ← Type → auto-increment counter
+├── _identityIndex: Dictionary        ← "Type:val1:val2" → Key (O(1) lookup)
+└── _registry: Dictionary             ← Key → IDataElement (data storage)
 ```
 
-### Public API
+### Why This Data Structure?
+
+| Structure | Purpose | Why |
+|-----------|---------|-----|
+| `_typeSchemas` | Store IdentityKeys per Type | Schema defined once, enforced on every Set. Like MongoDB's `createIndex({unique:true})` |
+| `_identityIndex` | Fast identity lookup | Without index: O(N) scan on every Set. With index: O(1) dictionary lookup |
+| `_typeCounters` | Auto-increment key generation | Keys independent of data content (Car:1, Car:2...). Changing properties never changes the key |
+| `_registry` | Element storage | The actual data pool. Key is server-generated, value is IDataElement |
+
+### Public API — Schema Layer
 
 | Method | Signature | Behavior |
 |--------|-----------|----------|
-| `Instance` | `static DMCServer` | Returns the single server instance |
-| `Register` | `bool Register(IDataElement)` | If key exists → Update; else → Add |
-| `Update` | `bool Update(IDataElement)` | Replace element at key; false if not found |
-| `Print` | `bool Print(string key)` | Call element.Print() by key |
-| `PrintAll` | `void PrintAll()` | Call Print() on every element in registry |
-| `Contains` | `bool Contains(string key)` | Check if key exists |
-| `Count` | `int` | Number of elements in system |
+| `DefineType` | `bool DefineType(type, identityKeys)` | Define IdentityKeys for a Type. Must be called before Set(). Returns false if already defined |
+| `GetTypeSchema` | `List<string>? GetTypeSchema(type)` | Returns IdentityKeys for a Type, or null |
+| `UpdateTypeSchema` | `(bool, List) UpdateTypeSchema(type, newKeys)` | Validate collisions → update schema + rebuild index. Returns conflicts if rejected |
 
-### How Register Works
+### Public API — Data Layer
 
-```text
-Register(element):
-    key = element.GetKey()           ← IKeyIdentifiable
-    if _registry.ContainsKey(key):
-        → Update(element)            ← Element already exists
-    else:
-        → _registry.Add(key, element) ← New element
-```
+| Method | Signature | Behavior |
+|--------|-----------|----------|
+| `Set` | `SetResult Set(type, props, key?, merge?, owner?)` | No key: identity match → Update or Create. With key: explicit update |
+| `Update` | `bool Update(key, props, merge?)` | Update by key. Merge (default) or Replace |
+| `Search` | `IEnumerable Search(type?, filters, owner?)` | Subset match via ISearchable + optional owner filter. Returns deep copies |
+| `Get` | `IDataElement? Get(key)` | Get single element by key. Returns deep copy |
+| `GetAll` | `IEnumerable GetAll()` | Get all elements. Returns deep copies |
+| `Print` | `bool Print(key)` | Print single element |
+| `PrintAll` | `void PrintAll()` | Print all elements |
 
-### How PrintAll Works
+### How Set Works (V2)
 
 ```text
-PrintAll():
-    foreach element in _registry.Values:
-        element.Print()              ← IPrintable (polymorphism)
+Set(type, properties, owner):
+    1. Validate schema exists: _typeSchemas[type]
+    2. Validate all IdentityKeys present in properties
+    3. lock(_lock):
+       a. Build identity key: "Car:Toyota:Camry" (from IdentityKeys)
+       b. Check _identityIndex: O(1) lookup
+          → Match found: UpdateProperties (merge/replace) → return UPDATED
+          → No match: GenerateKey (auto-increment) → Add to registry + index → return CREATED
+    4. Return SetResult { Action, Key }
 ```
 
-The server never knows what type the element is. It only uses the interface methods.
+**Why lock instead of ConcurrentDictionary?**
+Set() is a compound check-then-act: check index → create if not found. With ConcurrentDictionary, two threads could both see "not found" and both create → duplicate. Lock ensures the entire operation is atomic.
 
-## DMCGrpcService
+### Deep Copy (Defensive Copy)
 
-**Inherits**: `DMCService.DMCServiceBase` (generated from `dmc.proto`)
+`Search`, `Get`, `GetAll` return **cloned elements** with copied Properties dictionaries.
 
-Maps gRPC RPC calls to `DMCServer` operations:
+```text
+Without clone: Search() → lock → return reference → unlock → iterate Properties
+               Another thread: lock → modify same Properties → unlock → 💥 Collection modified!
 
-| RPC | Type | Delegates To |
-|-----|------|-------------|
-| `Register` | Unary | `DMCServer.Register()` |
-| `Update` | Unary | `DMCServer.Update()` |
-| `Print` | Unary | `DMCServer.Get()` → `ToDisplayString()` |
-| `PrintAll` | Server streaming | `DMCServer.GetAll()` → stream each element |
-| `BatchRegister` | Client streaming | Read stream → `Register()`/`Update()` per element |
-| `GetCount` | Unary | `DMCServer.Count` |
-| `Contains` | Unary | `DMCServer.Contains()` |
+With clone:    Search() → lock → copy Properties → unlock → iterate safely on own copy ✅
+```
 
-## DMCClient
+Lock protects the *access*, not the *usage*. Data leaving the lock must be a snapshot.
+
+## DMCGrpcService (V2)
+
+Maps gRPC RPC calls to `DMCServer` operations. Includes structured logging for every request.
+
+**Log format**: `[timestamp] [client-id@peer] ACTION detail`
+
+| RPC | Delegates To | Log Example |
+|-----|-------------|-------------|
+| `DefineType` | `DMCServer.DefineType()` | `[18:30:01] [alice@ipv4:...] DEFINE_TYPE OK Car[VIN]` |
+| `SetElement` | `DMCServer.Set()` | `[18:30:02] [alice@...] SET Created key=Car:1 type=Car owner=alice` |
+| `Search` | `DMCServer.Search()` | `[18:30:03] [alice@...] SEARCH type=Car filters=Make=Toyota → 2 found` |
+| `Print` | `DMCServer.Get()` → `ToDisplayString()` | `[18:30:04] [alice@...] PRINT key=Car:1 → found` |
+| `PrintAll` | `DMCServer.GetAll()` → stream | `[18:30:05] [alice@...] PRINT_ALL streaming 3 element(s)` |
+| `BatchSet` | `DMCServer.Set()` per element | `[18:30:06] [alice@...] BATCH_SET done: received=3 created=3` |
+
+**Client identity**: Extracted from gRPC metadata header `client-id`. Defaults to `"anonymous"`.
+
+## DMCClient (V2)
 
 Interactive console client that connects to a running DMC gRPC server.
 
-**Commands**: `register`, `update`, `print`, `printall`, `batch`, `count`, `contains`, `help`, `exit`
+**Commands**:
 
-```text
-DMCClient
-├── _client: DMCServiceClient     ← gRPC stub
-├── _channel: GrpcChannel         ← Connection to server
-└── RunAsync()                    ← Interactive command loop
-```
+| Category | Command | Description |
+|----------|---------|-------------|
+| Schema | `define-type` | Define IdentityKeys for a Type |
+| Schema | `update-schema` | Update IdentityKeys (validates collisions) |
+| Schema | `schema` | View current IdentityKeys for a Type |
+| Data | `set` | Set element (Server decides create/update) |
+| Data | `search` | Search by type and/or properties |
+| Data | `print` | Print single element by key |
+| Data | `printall` | Stream all elements |
+| Data | `batch` | Batch set multiple elements |
+| Utility | `count` | Element count |
+| Utility | `contains` | Check if key exists |
+
+**Client identity**: Set via `--client-id` flag or auto-generated as `client-{PID}`.
 
 ### Singleton Guarantee
 

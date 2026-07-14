@@ -38,7 +38,7 @@ The single binary supports three modes:
 
 ```bash
 ./DMC --server [--port 5000]                # gRPC server, listens for client connections
-./DMC --client [--address http://host:port]  # gRPC client, connects to a running server
+./DMC --client [--address http://host:port] [--client-id name]  # gRPC client with user identity
 ./DMC --local                               # Local interactive mode (no network)
 ```
 
@@ -48,17 +48,40 @@ The single binary supports three modes:
 | `--client` | Production: connect to a running server | Outbound connection |
 | `--local` | Development/testing: direct console interaction | None |
 
-## gRPC Service
+## gRPC Service (V2)
+
+### Schema Layer
 
 | RPC Method | Type | Description |
 |-----------|------|-------------|
-| `Register` | Unary | Register a new Data Element |
-| `Update` | Unary | Update an existing Data Element |
-| `Print` | Unary | Get display string of one element |
+| `DefineType` | Unary | Define IdentityKeys schema for a Type (one-time) |
+| `GetTypeSchema` | Unary | Get IdentityKeys definition for a Type |
+| `UpdateTypeSchema` | Unary | Update IdentityKeys with collision validation |
+
+### Data Layer
+
+| RPC Method | Type | Description |
+|-----------|------|-------------|
+| `SetElement` | Unary | Set a Data Element — Server decides Create/Update via IdentityKeys |
+| `Search` | Unary | Search elements by type, property filters, and/or owner |
+| `Print` | Unary | Get display string of one element by key |
 | `PrintAll` | Server streaming | Stream all elements to client |
-| `BatchRegister` | Client streaming | Client sends multiple elements in one call |
+| `BatchSet` | Client streaming | Client sends multiple elements in one call |
 | `GetCount` | Unary | Get total element count |
 | `Contains` | Unary | Check if element exists by key |
+
+### Why This Design (V1 → V2)
+
+V1 exposed separate `Register` and `Update` RPCs, forcing the Client to decide which to call.
+But the Client has no knowledge of what exists on the Server — only the Server can make this decision.
+
+V2 replaces both with a single `SetElement` RPC:
+- Client sends data, Server checks IdentityKeys to determine if the element exists
+- Exists → `UPDATED` (merge or replace), Not exists → `CREATED`
+- Server returns the action taken, so Client knows what happened
+
+This follows the spec: *"Register data element (In case New Data element)"* and
+*"Update data element (In case Data Element already in System)"* — both decisions belong to the Server.
 
 ## Important Notes
 
@@ -96,33 +119,33 @@ Client Client Client   ← All see same data
 
 Do not start two `--server` instances on the same port. The second one will fail with "address already in use".
 
-## Logic Flow
+## Logic Flow (V2)
 
 ```text
-User Input (stdin)
+Schema Definition (one-time per Type)
+      ↓
+  DefineType("Car", IdentityKeys=[VIN])
+      ↓
+Client Input (set command)
       ↓
 ┌─────────────────┐
-│   Program.cs    │  Reads commands, builds GenericDataElement
+│   DMCServer     │  1. Validate schema exists for Type
+│   (Singleton)   │  2. Build identity key from IdentityKeys
+│                 │  3. Check identity index (O(1) lookup)
+│                 │  4. Match → Update (merge/replace)
+│                 │     No match → Create (auto-increment key)
+│                 │  5. Return deep copy (thread-safe snapshot)
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│   DMCServer     │  Calls element.GetKey() → stores in Dictionary
-│   (Singleton)   │  Calls element.Print() → outputs to console
+│ IDataElement    │  IIdentifiable: identity matching via IdentityKeys
+│ GenericData...  │  ISearchable: subset property filtering
+│                 │  IPrintable: self-display without Server knowing type
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│ IDataElement    │  Interface contract (IKeyIdentifiable + IPrintable)
-│ GenericData...  │  Concrete implementation — any type, any properties
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ HardwareBridge  │  C# managed wrapper
-│ (P/Invoke)      │  Calls native C++ functions
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ libHardwareLogic│  C++ shared library (.so)
-│ (Native)        │  Hardware init, read, write, diagnostics
+│ HardwareBridge  │  C# managed wrapper (P/Invoke)
+│ libHardwareLogic│  C++ native hardware control
 └─────────────────┘
 ```
 
@@ -140,8 +163,15 @@ User Input (stdin)
 
 | Decision | Rationale |
 |----------|-----------|
+| **Single SetElement RPC** (replaces Register+Update) | Only the Server has the registry — only it can decide if an element is new or existing. Client should not make this decision. |
+| **IdentityKeys as per-Type schema** | Identity is defined once per Type (like a DB UNIQUE constraint), not per element. Prevents inconsistent matching and enables O(1) identity index lookup. Modeled after MongoDB's `createIndex({unique:true})`. |
+| **Server-generated auto-increment keys** | Keys are independent of data content — changing a property doesn't change the key. Guaranteed unique by Server. |
+| **Defensive copy (CloneElement)** | `Search`/`Get`/`GetAll` return deep copies so callers can safely iterate Properties outside the lock. Prevents `Collection was modified` exceptions during concurrent access. |
+| **Thread safety via `lock`** | All public DMCServer methods wrapped in `lock(_lock)`. Chosen over `ConcurrentDictionary` because `Set()` is a compound check-then-act operation that must be atomic. |
+| **Merge/Replace update modes** | Merge (default) preserves properties not included in the update. Replace overwrites entirely. Same pattern as MongoDB's `$set` vs `replaceOne`. |
+| **Multi-user ownership tracking** | Each element records its creator via `client-id` gRPC metadata. Shared data pool (collaborative) — anyone can read/update, but ownership is tracked for filtering and audit. |
+| **`Dictionary<string, string>` for properties** | Server stores all values as strings, never interprets data types. Fulfills spec requirement: *"DMC handles all types without knowing their details."* |
 | Singleton Server | All clients within one process share one data pool |
-| Interface separation (IKeyIdentifiable + IPrintable) | Each element controls its own identity and display |
 | GenericDataElement | Any type at runtime, no recompilation needed |
 | gRPC communication | Remote client-server interaction with streaming support |
 | Three execution modes | Flexible: network service, remote client, or standalone |
