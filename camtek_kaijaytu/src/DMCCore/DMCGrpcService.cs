@@ -19,6 +19,14 @@ namespace DMC.Core
             _server = DMCServer.Instance;
         }
 
+        private static string Timestamp => DateTime.Now.ToString("HH:mm:ss.fff");
+        private static string Peer(ServerCallContext ctx) => ctx.Peer ?? "unknown";
+
+        private static void Log(string action, string detail, ServerCallContext ctx)
+        {
+            Console.WriteLine($"  [{Timestamp}] [{Peer(ctx)}] {action,-14} {detail}");
+        }
+
         // =================================================================
         // Schema RPCs
         // =================================================================
@@ -28,16 +36,17 @@ namespace DMC.Core
             try
             {
                 bool result = _server.DefineType(request.Type, request.IdentityKeys.ToList());
-                return Task.FromResult(new DefineTypeResponse
-                {
-                    Success = result,
-                    Message = result
-                        ? $"Type '{request.Type}' defined with IdentityKeys=[{string.Join(", ", request.IdentityKeys)}]"
-                        : $"Type '{request.Type}' already defined"
-                });
+                string msg = result
+                    ? $"Type '{request.Type}' defined with IdentityKeys=[{string.Join(", ", request.IdentityKeys)}]"
+                    : $"Type '{request.Type}' already defined";
+
+                Log("DEFINE_TYPE", result ? $"OK  {request.Type}[{string.Join(",", request.IdentityKeys)}]" : $"DUP {request.Type}", context);
+
+                return Task.FromResult(new DefineTypeResponse { Success = result, Message = msg });
             }
             catch (ArgumentException ex)
             {
+                Log("DEFINE_TYPE", $"ERR {ex.Message}", context);
                 return Task.FromResult(new DefineTypeResponse { Success = false, Message = ex.Message });
             }
         }
@@ -45,13 +54,10 @@ namespace DMC.Core
         public override Task<GetTypeSchemaResponse> GetTypeSchema(GetTypeSchemaRequest request, ServerCallContext context)
         {
             var schema = _server.GetTypeSchema(request.Type);
-            var response = new GetTypeSchemaResponse
-            {
-                Found = schema != null,
-                Type = request.Type
-            };
-            if (schema != null)
-                response.IdentityKeys.AddRange(schema);
+            Log("GET_SCHEMA", schema != null ? $"{request.Type}[{string.Join(",", schema)}]" : $"{request.Type} not found", context);
+
+            var response = new GetTypeSchemaResponse { Found = schema != null, Type = request.Type };
+            if (schema != null) response.IdentityKeys.AddRange(schema);
             return Task.FromResult(response);
         }
 
@@ -72,20 +78,20 @@ namespace DMC.Core
                 {
                     if (!_server.Contains(existingKey))
                     {
+                        Log("SET", $"NOT_FOUND key={existingKey}", context);
                         return Task.FromResult(new SetElementResponse
                         {
-                            Success = false,
-                            Key = existingKey,
+                            Success = false, Key = existingKey,
                             Action = Grpc.SetAction.NotFound,
                             Message = $"Element '{existingKey}' not found"
                         });
                     }
 
                     _server.Update(existingKey, props, merge);
+                    Log("SET", $"UPDATED  key={existingKey} (explicit, {(merge ? "merge" : "replace")})", context);
                     return Task.FromResult(new SetElementResponse
                     {
-                        Success = true,
-                        Key = existingKey,
+                        Success = true, Key = existingKey,
                         Action = Grpc.SetAction.Updated,
                         Message = "Updated successfully"
                     });
@@ -108,21 +114,18 @@ namespace DMC.Core
                     _ => "OK"
                 };
 
+                Log("SET", $"{result.Action,-8} key={result.Key} type={request.Type} (count={_server.Count})", context);
+
                 return Task.FromResult(new SetElementResponse
                 {
-                    Success = true,
-                    Key = result.Key,
-                    Action = grpcAction,
-                    Message = message
+                    Success = true, Key = result.Key,
+                    Action = grpcAction, Message = message
                 });
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new SetElementResponse
-                {
-                    Success = false,
-                    Message = ex.Message
-                });
+                Log("SET", $"ERR {ex.Message}", context);
+                return Task.FromResult(new SetElementResponse { Success = false, Message = ex.Message });
             }
         }
 
@@ -138,8 +141,7 @@ namespace DMC.Core
             {
                 var msg = new DataElementMessage
                 {
-                    Key = element.Key,
-                    Type = element.Type,
+                    Key = element.Key, Type = element.Type,
                     Display = element.ToDisplayString()
                 };
                 if (element is GenericDataElement generic)
@@ -150,33 +152,39 @@ namespace DMC.Core
                 response.Results.Add(msg);
             }
             response.TotalFound = response.Results.Count;
+
+            string filterStr = filters.Count > 0
+                ? string.Join(",", filters.Select(f => $"{f.Key}={f.Value}"))
+                : "(none)";
+            Log("SEARCH", $"type={type ?? "*"} filters={filterStr} → {response.TotalFound} found", context);
+
             return Task.FromResult(response);
         }
 
         public override Task<PrintResponse> Print(PrintRequest request, ServerCallContext context)
         {
             var element = _server.Get(request.Key);
+            Log("PRINT", element != null ? $"key={request.Key} → found" : $"key={request.Key} → not found", context);
+
             if (element != null)
             {
-                return Task.FromResult(new PrintResponse
-                {
-                    Found = true,
-                    Display = element.ToDisplayString()
-                });
+                return Task.FromResult(new PrintResponse { Found = true, Display = element.ToDisplayString() });
             }
             return Task.FromResult(new PrintResponse { Found = false, Display = "" });
         }
 
         public override async Task PrintAll(PrintAllRequest request, IServerStreamWriter<DataElementMessage> responseStream, ServerCallContext context)
         {
-            foreach (var element in _server.GetAll())
+            var elements = _server.GetAll();
+            Log("PRINT_ALL", $"streaming {elements.Count()} element(s)", context);
+
+            foreach (var element in elements)
             {
                 if (context.CancellationToken.IsCancellationRequested) break;
 
                 var msg = new DataElementMessage
                 {
-                    Key = element.Key,
-                    Type = element.Type,
+                    Key = element.Key, Type = element.Type,
                     Display = element.ToDisplayString()
                 };
                 if (element is GenericDataElement generic)
@@ -192,6 +200,8 @@ namespace DMC.Core
         {
             int totalReceived = 0, totalCreated = 0, totalUpdated = 0;
             var keys = new List<string>();
+
+            Log("BATCH_SET", "stream started", context);
 
             await foreach (var request in requestStream.ReadAllAsync(context.CancellationToken))
             {
@@ -209,6 +219,8 @@ namespace DMC.Core
                 catch { /* skip invalid entries */ }
             }
 
+            Log("BATCH_SET", $"done: received={totalReceived} created={totalCreated} updated={totalUpdated}", context);
+
             var response = new BatchSetResponse
             {
                 TotalReceived = totalReceived,
@@ -221,12 +233,16 @@ namespace DMC.Core
 
         public override Task<CountResponse> GetCount(Empty request, ServerCallContext context)
         {
-            return Task.FromResult(new CountResponse { Count = _server.Count });
+            int count = _server.Count;
+            Log("COUNT", $"{count}", context);
+            return Task.FromResult(new CountResponse { Count = count });
         }
 
         public override Task<ContainsResponse> Contains(ContainsRequest request, ServerCallContext context)
         {
-            return Task.FromResult(new ContainsResponse { Exists = _server.Contains(request.Key) });
+            bool exists = _server.Contains(request.Key);
+            Log("CONTAINS", $"key={request.Key} → {exists}", context);
+            return Task.FromResult(new ContainsResponse { Exists = exists });
         }
     }
 }
