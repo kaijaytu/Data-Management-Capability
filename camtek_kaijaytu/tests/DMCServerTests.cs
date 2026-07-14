@@ -340,6 +340,155 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Thread Safety Tests
+        // =====================================================================
+
+        public void S18_ConcurrentSet()
+        {
+            Console.WriteLine("=== S-18: Concurrent Set (100 threads, same Type) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Item", new List<string> { "Id" });
+
+            int threadCount = 100;
+            int successCount = 0;
+            var exceptions = new List<Exception>();
+
+            Parallel.For(0, threadCount, new ParallelOptions { MaxDegreeOfParallelism = threadCount }, i =>
+            {
+                try
+                {
+                    server.Set("Item", new Dictionary<string, string>
+                    {
+                        ["Id"] = $"ITEM-{i:D4}",
+                        ["Value"] = $"data-{i}"
+                    });
+                    Interlocked.Increment(ref successCount);
+                }
+                catch (Exception ex)
+                {
+                    lock (exceptions) { exceptions.Add(ex); }
+                }
+            });
+
+            Assert(successCount == threadCount, $"All {threadCount} should succeed, got {successCount}");
+            Assert(exceptions.Count == 0, $"No exceptions, got {exceptions.Count}");
+            Assert(server.Count == threadCount, $"Count should be {threadCount}, got {server.Count}");
+            Console.WriteLine();
+        }
+
+        public void S19_ConcurrentSetSameIdentity()
+        {
+            Console.WriteLine("=== S-19: Concurrent Set Same Identity (race condition test) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Car", new List<string> { "VIN" });
+
+            int threadCount = 50;
+            int createdCount = 0;
+            int updatedCount = 0;
+
+            Parallel.For(0, threadCount, new ParallelOptions { MaxDegreeOfParallelism = threadCount }, i =>
+            {
+                var result = server.Set("Car", new Dictionary<string, string>
+                {
+                    ["VIN"] = "SAME-VIN-001",
+                    ["Iteration"] = $"{i}"
+                });
+
+                if (result.Action == SetAction.Created)
+                    Interlocked.Increment(ref createdCount);
+                else
+                    Interlocked.Increment(ref updatedCount);
+            });
+
+            Assert(createdCount == 1, $"Exactly 1 should be Created, got {createdCount}");
+            Assert(updatedCount == threadCount - 1, $"{threadCount - 1} should be Updated, got {updatedCount}");
+            Assert(server.Count == 1, $"Count should be 1 (no duplicates), got {server.Count}");
+            Console.WriteLine($"  Created: {createdCount}, Updated: {updatedCount}");
+            Console.WriteLine();
+        }
+
+        public void S20_ConcurrentReadWrite()
+        {
+            Console.WriteLine("=== S-20: Concurrent Read/Write Mix ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Sensor", new List<string> { "DeviceId" });
+
+            // Pre-populate
+            for (int i = 0; i < 10; i++)
+            {
+                server.Set("Sensor", new Dictionary<string, string>
+                {
+                    ["DeviceId"] = $"SNR-{i:D3}",
+                    ["Value"] = "0"
+                });
+            }
+
+            int readErrors = 0;
+            int writeErrors = 0;
+            int totalOps = 0;
+
+            Parallel.For(0, 200, new ParallelOptions { MaxDegreeOfParallelism = 50 }, i =>
+            {
+                try
+                {
+                    if (i % 2 == 0)
+                    {
+                        // Write: update existing sensor
+                        server.Set("Sensor", new Dictionary<string, string>
+                        {
+                            ["DeviceId"] = $"SNR-{i % 10:D3}",
+                            ["Value"] = $"{i * 1.5}"
+                        });
+                    }
+                    else
+                    {
+                        // Read: search
+                        var results = server.Search("Sensor", new Dictionary<string, string>());
+                        if (results == null)
+                            Interlocked.Increment(ref readErrors);
+                    }
+                    Interlocked.Increment(ref totalOps);
+                }
+                catch
+                {
+                    if (i % 2 == 0) Interlocked.Increment(ref writeErrors);
+                    else Interlocked.Increment(ref readErrors);
+                }
+            });
+
+            Assert(readErrors == 0, $"No read errors, got {readErrors}");
+            Assert(writeErrors == 0, $"No write errors, got {writeErrors}");
+            Assert(totalOps == 200, $"All 200 ops should complete, got {totalOps}");
+            Assert(server.Count == 10, $"Count should still be 10, got {server.Count}");
+            Console.WriteLine($"  Total ops: {totalOps}, Read errors: {readErrors}, Write errors: {writeErrors}");
+            Console.WriteLine();
+        }
+
+        public void S21_ConcurrentDefineType()
+        {
+            Console.WriteLine("=== S-21: Concurrent DefineType (same Type) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+
+            int successCount = 0;
+
+            Parallel.For(0, 50, new ParallelOptions { MaxDegreeOfParallelism = 50 }, i =>
+            {
+                bool result = server.DefineType("Race", new List<string> { $"Key{i}" });
+                if (result) Interlocked.Increment(ref successCount);
+            });
+
+            Assert(successCount == 1, $"Exactly 1 DefineType should succeed, got {successCount}");
+            var schema = server.GetTypeSchema("Race");
+            Assert(schema != null, "Race schema should exist");
+            Console.WriteLine($"  Winner's IdentityKeys: [{string.Join(", ", schema!)}]");
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -364,6 +513,10 @@ namespace DMC.Tests
             S15_SearchCrossType();
             S16_SensorMergeRealistic();
             S17_PrintAndPrintAll();
+            S18_ConcurrentSet();
+            S19_ConcurrentSetSameIdentity();
+            S20_ConcurrentReadWrite();
+            S21_ConcurrentDefineType();
 
             sw.Stop();
 
