@@ -7,7 +7,7 @@ namespace DMC.Client
 {
     /// <summary>
     /// Interactive gRPC client for DMC Server.
-    /// Connects to the server and provides Register/Update/Print/PrintAll/BatchRegister commands.
+    /// V2: Schema (define-type) + Data (set, search, print, printall, batch).
     /// </summary>
     public class DMCClient
     {
@@ -23,7 +23,7 @@ namespace DMC.Client
         public async Task RunInteractive()
         {
             Console.WriteLine($"Connected to DMC Server.");
-            Console.WriteLine("Commands: register, update, print, printall, batch, count, contains, quit");
+            Console.WriteLine("Commands: define-type, schema, set, search, print, printall, batch, count, contains, help, quit");
             Console.WriteLine();
 
             bool running = true;
@@ -39,11 +39,17 @@ namespace DMC.Client
                 {
                     switch (input)
                     {
-                        case "register":
-                            await HandleRegister();
+                        case "define-type":
+                            await HandleDefineType();
                             break;
-                        case "update":
-                            await HandleUpdate();
+                        case "schema":
+                            await HandleGetSchema();
+                            break;
+                        case "set":
+                            await HandleSet();
+                            break;
+                        case "search":
+                            await HandleSearch();
                             break;
                         case "print":
                             await HandlePrint();
@@ -52,7 +58,7 @@ namespace DMC.Client
                             await HandlePrintAll();
                             break;
                         case "batch":
-                            await HandleBatchRegister();
+                            await HandleBatchSet();
                             break;
                         case "count":
                             await HandleCount();
@@ -88,33 +94,51 @@ namespace DMC.Client
             Console.WriteLine("Client disconnected.");
         }
 
-        private async Task HandleRegister()
+        // =================================================================
+        // Schema Commands
+        // =================================================================
+
+        private async Task HandleDefineType()
         {
             Console.Write("  Type: ");
             string? type = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(type)) return;
 
-            var props = ReadProperties();
-            if (props.Count == 0) return;
+            Console.Write("  IdentityKeys (comma-separated, e.g. Make,Model): ");
+            string? keys = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(keys)) return;
 
-            Console.Write($"  Key property [{props[0].Key}]: ");
-            string? keyProp = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(keyProp))
-                keyProp = props[0].Key;
+            var identityKeys = keys.Split(',').Select(k => k.Trim()).Where(k => k.Length > 0).ToList();
+            if (identityKeys.Count == 0) return;
 
-            var request = new RegisterRequest { Type = type, KeyProperty = keyProp };
-            request.Properties.AddRange(props);
+            var request = new DefineTypeRequest { Type = type };
+            request.IdentityKeys.AddRange(identityKeys);
 
-            var response = await _client.RegisterAsync(request);
-            Console.WriteLine($"  Result: {response.Message}");
-            Console.WriteLine($"  Key: {response.GeneratedKey}");
+            var response = await _client.DefineTypeAsync(request);
+            Console.WriteLine($"  {response.Message}");
         }
 
-        private async Task HandleUpdate()
+        private async Task HandleGetSchema()
         {
-            Console.Write("  Key to update: ");
+            Console.Write("  Type: ");
+            string? type = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(type)) return;
+
+            var response = await _client.GetTypeSchemaAsync(new GetTypeSchemaRequest { Type = type });
+            if (response.Found)
+                Console.WriteLine($"  {response.Type}: IdentityKeys=[{string.Join(", ", response.IdentityKeys)}]");
+            else
+                Console.WriteLine($"  Type '{type}' not defined.");
+        }
+
+        // =================================================================
+        // Data Commands
+        // =================================================================
+
+        private async Task HandleSet()
+        {
+            Console.Write("  Key (empty for new): ");
             string? key = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(key)) return;
 
             Console.Write("  Type: ");
             string? type = Console.ReadLine()?.Trim();
@@ -123,17 +147,34 @@ namespace DMC.Client
             var props = ReadProperties();
             if (props.Count == 0) return;
 
-            Console.Write($"  Key property [{props[0].Key}]: ");
-            string? keyProp = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(keyProp))
-                keyProp = props[0].Key;
-
-            var request = new UpdateRequest { Type = type, KeyProperty = keyProp };
+            var request = new SetElementRequest { Type = type };
+            if (!string.IsNullOrEmpty(key))
+                request.Key = key;
             request.Properties.AddRange(props);
 
-            var response = await _client.UpdateAsync(request);
-            Console.WriteLine($"  Result: {response.Message}");
+            var response = await _client.SetElementAsync(request);
+            Console.WriteLine($"  Action: {response.Action}");
             Console.WriteLine($"  Key: {response.Key}");
+            Console.WriteLine($"  Message: {response.Message}");
+        }
+
+        private async Task HandleSearch()
+        {
+            Console.Write("  Type (empty for all): ");
+            string? type = Console.ReadLine()?.Trim();
+
+            Console.WriteLine("  Filters (key=value, empty to finish):");
+            var filters = ReadProperties();
+
+            var request = new SearchRequest();
+            if (!string.IsNullOrEmpty(type))
+                request.Type = type;
+            request.Filters.AddRange(filters);
+
+            var response = await _client.SearchAsync(request);
+            Console.WriteLine($"  --- Results ({response.TotalFound} found) ---");
+            foreach (var msg in response.Results)
+                Console.WriteLine($"  [{msg.Key}] {msg.Display}");
         }
 
         private async Task HandlePrint()
@@ -164,10 +205,10 @@ namespace DMC.Client
             Console.WriteLine($"  Total: {count} element(s)");
         }
 
-        private async Task HandleBatchRegister()
+        private async Task HandleBatchSet()
         {
             Console.WriteLine("  Batch mode: enter elements one by one. Type 'done' to send batch.");
-            var requests = new List<RegisterRequest>();
+            var requests = new List<SetElementRequest>();
 
             while (true)
             {
@@ -179,12 +220,7 @@ namespace DMC.Client
                 var props = ReadProperties();
                 if (props.Count == 0) continue;
 
-                Console.Write($"    Key property [{props[0].Key}]: ");
-                string? keyProp = Console.ReadLine()?.Trim();
-                if (string.IsNullOrEmpty(keyProp))
-                    keyProp = props[0].Key;
-
-                var req = new RegisterRequest { Type = type, KeyProperty = keyProp };
+                var req = new SetElementRequest { Type = type };
                 req.Properties.AddRange(props);
                 requests.Add(req);
             }
@@ -197,16 +233,14 @@ namespace DMC.Client
 
             Console.WriteLine($"  Sending {requests.Count} elements...");
 
-            using var call = _client.BatchRegister();
+            using var call = _client.BatchSet();
             foreach (var req in requests)
-            {
                 await call.RequestStream.WriteAsync(req);
-            }
             await call.RequestStream.CompleteAsync();
 
             var response = await call.ResponseAsync;
             Console.WriteLine($"  Received: {response.TotalReceived}");
-            Console.WriteLine($"  Registered: {response.TotalRegistered}");
+            Console.WriteLine($"  Created: {response.TotalCreated}");
             Console.WriteLine($"  Updated: {response.TotalUpdated}");
         }
 
@@ -225,6 +259,10 @@ namespace DMC.Client
             var response = await _client.ContainsAsync(new ContainsRequest { Key = key });
             Console.WriteLine($"  Exists: {response.Exists}");
         }
+
+        // =================================================================
+        // Helpers
+        // =================================================================
 
         private List<KeyValuePair> ReadProperties()
         {
@@ -255,15 +293,18 @@ namespace DMC.Client
 
         private void PrintHelp()
         {
-            Console.WriteLine("  Commands:");
-            Console.WriteLine("    register  - Register a new Data Element");
-            Console.WriteLine("    update    - Update an existing Data Element");
-            Console.WriteLine("    print     - Print a single element by key");
-            Console.WriteLine("    printall  - Stream all elements from server");
-            Console.WriteLine("    batch     - Batch register multiple elements (client streaming)");
-            Console.WriteLine("    count     - Get element count");
-            Console.WriteLine("    contains  - Check if element exists");
-            Console.WriteLine("    quit      - Disconnect");
+            Console.WriteLine("  Schema Commands:");
+            Console.WriteLine("    define-type - Define IdentityKeys for a Type (one-time)");
+            Console.WriteLine("    schema      - View IdentityKeys for a Type");
+            Console.WriteLine("  Data Commands:");
+            Console.WriteLine("    set         - Set a Data Element (Server decides create/update)");
+            Console.WriteLine("    search      - Search elements by type and/or properties");
+            Console.WriteLine("    print       - Print a single element by key");
+            Console.WriteLine("    printall    - Stream all elements from server");
+            Console.WriteLine("    batch       - Batch set multiple elements (client streaming)");
+            Console.WriteLine("    count       - Get element count");
+            Console.WriteLine("    contains    - Check if element exists by key");
+            Console.WriteLine("    quit        - Disconnect");
         }
     }
 }
