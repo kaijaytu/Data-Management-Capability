@@ -559,6 +559,92 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Schema Migration Tests
+        // =====================================================================
+
+        public void S24_UpdateSchemaSuccess()
+        {
+            Console.WriteLine("=== S-24: UpdateTypeSchema (no collision) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Car", new List<string> { "VIN" });
+
+            server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-001", ["Make"] = "Toyota", ["Model"] = "Camry" });
+            server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-002", ["Make"] = "Honda", ["Model"] = "Civic" });
+
+            // Tighten: [VIN] → [VIN, Make] — no collision
+            var (success, conflicts) = server.UpdateTypeSchema("Car", new List<string> { "VIN", "Make" });
+            Assert(success, "Schema update should succeed (no collision)");
+            Assert(conflicts.Count == 0, "Should have 0 conflicts");
+
+            var schema = server.GetTypeSchema("Car");
+            Assert(schema!.Contains("VIN") && schema.Contains("Make"),
+                $"Schema should be [VIN, Make], got [{string.Join(", ", schema)}]");
+
+            // Verify new schema works: same VIN+Make → Updated
+            var r = server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-001", ["Make"] = "Toyota", ["Year"] = "2025" });
+            Assert(r.Action == SetAction.Updated, "Same VIN+Make should still match after schema update");
+            Console.WriteLine();
+        }
+
+        public void S25_UpdateSchemaCollision()
+        {
+            Console.WriteLine("=== S-25: UpdateTypeSchema (collision → rejected) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Car", new List<string> { "VIN" });
+
+            server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-A", ["Make"] = "Toyota", ["Model"] = "Camry" });
+            server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-B", ["Make"] = "Toyota", ["Model"] = "RAV4" });
+
+            // Loosen: [VIN] → [Make] — collision! Both are Toyota
+            var (success, conflicts) = server.UpdateTypeSchema("Car", new List<string> { "Make" });
+            Assert(!success, "Schema update should fail (collision)");
+            Assert(conflicts.Count == 1, $"Should have 1 conflict, got {conflicts.Count}");
+            Console.WriteLine($"  Conflict: {conflicts[0].KeyA} ↔ {conflicts[0].KeyB}");
+
+            // Schema should remain unchanged
+            var schema = server.GetTypeSchema("Car");
+            Assert(schema!.Count == 1 && schema[0] == "VIN",
+                $"Schema should remain [VIN], got [{string.Join(", ", schema)}]");
+            Console.WriteLine();
+        }
+
+        public void S26_UpdateSchemaMissingProperty()
+        {
+            Console.WriteLine("=== S-26: UpdateTypeSchema (missing property → error) ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Car", new List<string> { "VIN" });
+
+            server.Set("Car", new Dictionary<string, string>
+                { ["VIN"] = "VIN-X", ["Make"] = "Toyota" });
+
+            bool threw = false;
+            try { server.UpdateTypeSchema("Car", new List<string> { "Color" }); }
+            catch (ArgumentException) { threw = true; }
+            Assert(threw, "Should throw if element missing new IdentityKey property");
+            Console.WriteLine();
+        }
+
+        public void S27_UpdateSchemaUndefinedType()
+        {
+            Console.WriteLine("=== S-27: UpdateTypeSchema (undefined type → error) ===");
+            var server = DMCServer.Instance;
+
+            bool threw = false;
+            try { server.UpdateTypeSchema("Ghost", new List<string> { "Id" }); }
+            catch (InvalidOperationException) { threw = true; }
+            Assert(threw, "Should throw for undefined type");
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -589,12 +675,25 @@ namespace DMC.Tests
             S21_ConcurrentDefineType();
             S22_OwnerTracking();
             S23_SearchByOwner();
+            S24_UpdateSchemaSuccess();
+            S25_UpdateSchemaCollision();
+            S26_UpdateSchemaMissingProperty();
+            S27_UpdateSchemaUndefinedType();
 
             sw.Stop();
 
             Console.WriteLine("══════════════════════════════════════════════════════");
             Console.WriteLine($"  DMCServer Unit Tests: {_passed} passed, {_failed} failed");
             Console.WriteLine($"  Elapsed: {sw.ElapsedMilliseconds} ms");
+            Console.WriteLine("──────────────────────────────────────────────────────");
+            Console.WriteLine("  Coverage:");
+            Console.WriteLine("    Schema     S01-S04  DefineType, duplicate, validation, GetTypeSchema");
+            Console.WriteLine("    Set/Update S05-S12  identity match, merge, replace, NOT_FOUND, validation");
+            Console.WriteLine("    Search     S13-S16  by type, by filter, cross-type, sensor merge");
+            Console.WriteLine("    Print      S17      Print, PrintAll, Contains, Count, ToDisplayString");
+            Console.WriteLine("    Concurrency S18-S21 100-thread Set, same-identity race, R/W mix, DefineType race");
+            Console.WriteLine("    Multi-User S22-S23  owner tracking, search by owner");
+            Console.WriteLine("    Migration  S24-S27  schema tighten, collision reject, missing prop, undefined type");
             Console.WriteLine("══════════════════════════════════════════════════════");
         }
 

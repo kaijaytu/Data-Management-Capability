@@ -14,6 +14,9 @@ service DMCService {
   // Schema: Get IdentityKeys for a Type
   rpc GetTypeSchema (GetTypeSchemaRequest) returns (GetTypeSchemaResponse);
 
+  // Schema: Update IdentityKeys for a Type (validates existing data for collisions)
+  rpc UpdateTypeSchema (UpdateTypeSchemaRequest) returns (UpdateTypeSchemaResponse);
+
   // Data: Set a Data Element (Server decides Create/Update)
   rpc SetElement (SetElementRequest) returns (SetElementResponse);
 
@@ -63,6 +66,22 @@ message GetTypeSchemaResponse {
   bool found = 1;
   string type = 2;
   repeated string identity_keys = 3;
+}
+
+message UpdateTypeSchemaRequest {
+  string type = 1;
+  repeated string new_identity_keys = 2;
+}
+
+message UpdateTypeSchemaResponse {
+  bool success = 1;
+  string message = 2;
+  repeated SchemaConflict conflicts = 3;
+}
+
+message SchemaConflict {
+  string key_a = 1;
+  string key_b = 2;
 }
 
 // --- SetElement messages ---

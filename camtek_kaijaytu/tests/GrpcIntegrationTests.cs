@@ -577,6 +577,16 @@ namespace DMC.Tests
             Console.WriteLine("══════════════════════════════════════════════════════");
             Console.WriteLine($"  Results: {_passed} passed, {_failed} failed");
             Console.WriteLine($"  Elapsed: {sw.ElapsedMilliseconds} ms");
+            Console.WriteLine("──────────────────────────────────────────────────────");
+            Console.WriteLine("  Coverage:");
+            Console.WriteLine("    Schema      T01-T03  DefineType(Car[VIN], Sensor, Person), duplicate, GetTypeSchema");
+            Console.WriteLine("    Set/Update  T04-T09  new car, identity match(merge), different VIN, explicit key, NOT_FOUND, no schema");
+            Console.WriteLine("    Sensor      T10      realistic IoT 8-prop element, merge readings");
+            Console.WriteLine("    Search      T11-T12  by type, by property filter");
+            Console.WriteLine("    Print       T13      PrintAll server streaming");
+            Console.WriteLine("    Batch       T14-T15  BatchSet 3 persons, final count verification");
+            Console.WriteLine("    Concurrency T16-T18  50 concurrent unique, 50 same identity race, 100 mixed R/W");
+            Console.WriteLine("    Multi-User  T19-T20  owner tracking via gRPC metadata, search by owner");
             Console.WriteLine("══════════════════════════════════════════════════════");
         }
 

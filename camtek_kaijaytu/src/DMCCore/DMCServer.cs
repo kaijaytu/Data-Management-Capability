@@ -83,6 +83,79 @@ namespace DMC.Core
             }
         }
 
+        /// <summary>
+        /// Update the IdentityKeys schema for an existing Type.
+        /// Validates all existing elements for collisions under the new schema.
+        /// Returns (success, list of conflicting key pairs).
+        /// </summary>
+        public (bool Success, List<(string KeyA, string KeyB)> Conflicts) UpdateTypeSchema(string type, List<string> newIdentityKeys)
+        {
+            if (string.IsNullOrWhiteSpace(type))
+                throw new ArgumentException("Type cannot be empty.", nameof(type));
+            if (newIdentityKeys == null || newIdentityKeys.Count == 0)
+                throw new ArgumentException("IdentityKeys is required.", nameof(newIdentityKeys));
+
+            lock (_lock)
+            {
+                if (!_typeSchemas.ContainsKey(type))
+                    throw new InvalidOperationException($"Type '{type}' not defined.");
+
+                // Get all elements of this Type
+                var elements = _registry.Values
+                    .Where(e => e.Type == type)
+                    .Cast<GenericDataElement>()
+                    .ToList();
+
+                // Validate: all elements must have the new identity keys
+                foreach (var elem in elements)
+                {
+                    foreach (var idKey in newIdentityKeys)
+                    {
+                        if (!elem.Properties.ContainsKey(idKey))
+                            throw new ArgumentException(
+                                $"Element '{elem.Key}' is missing property '{idKey}' required by new IdentityKeys.");
+                    }
+                }
+
+                // Check for collisions under new IdentityKeys
+                var newIndex = new Dictionary<string, string>();
+                var conflicts = new List<(string, string)>();
+
+                foreach (var elem in elements)
+                {
+                    string newIdKey = BuildIdentityKey(type, elem.Properties, newIdentityKeys);
+                    if (newIndex.TryGetValue(newIdKey, out var existingKey))
+                    {
+                        conflicts.Add((existingKey, elem.Key));
+                    }
+                    else
+                    {
+                        newIndex[newIdKey] = elem.Key;
+                    }
+                }
+
+                if (conflicts.Count > 0)
+                    return (false, conflicts);
+
+                // No collisions → update schema + rebuild identity index
+                _typeSchemas[type] = new List<string>(newIdentityKeys);
+
+                // Remove old identity index entries for this Type
+                var oldEntries = _identityIndex
+                    .Where(kv => kv.Key.StartsWith(type + ":"))
+                    .Select(kv => kv.Key)
+                    .ToList();
+                foreach (var key in oldEntries)
+                    _identityIndex.Remove(key);
+
+                // Add new identity index entries
+                foreach (var kv in newIndex)
+                    _identityIndex[kv.Key] = kv.Value;
+
+                return (true, new List<(string, string)>());
+            }
+        }
+
         // =================================================================
         // Data Layer
         // =================================================================

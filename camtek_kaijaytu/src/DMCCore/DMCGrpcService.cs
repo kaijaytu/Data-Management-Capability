@@ -67,6 +67,36 @@ namespace DMC.Core
             return Task.FromResult(response);
         }
 
+        public override Task<UpdateTypeSchemaResponse> UpdateTypeSchema(UpdateTypeSchemaRequest request, ServerCallContext context)
+        {
+            try
+            {
+                var (success, conflicts) = _server.UpdateTypeSchema(request.Type, request.NewIdentityKeys.ToList());
+
+                var response = new UpdateTypeSchemaResponse
+                {
+                    Success = success,
+                    Message = success
+                        ? $"Schema updated: {request.Type}[{string.Join(", ", request.NewIdentityKeys)}]"
+                        : $"Schema update rejected: {conflicts.Count} collision(s)"
+                };
+
+                foreach (var (keyA, keyB) in conflicts)
+                    response.Conflicts.Add(new SchemaConflict { KeyA = keyA, KeyB = keyB });
+
+                Log("UPD_SCHEMA", success
+                    ? $"OK  {request.Type}[{string.Join(",", request.NewIdentityKeys)}]"
+                    : $"REJECTED {request.Type} ({conflicts.Count} conflicts)", context);
+
+                return Task.FromResult(response);
+            }
+            catch (Exception ex)
+            {
+                Log("UPD_SCHEMA", $"ERR {ex.Message}", context);
+                return Task.FromResult(new UpdateTypeSchemaResponse { Success = false, Message = ex.Message });
+            }
+        }
+
         // =================================================================
         // Data RPCs
         // =================================================================

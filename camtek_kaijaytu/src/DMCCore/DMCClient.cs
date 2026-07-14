@@ -29,7 +29,7 @@ namespace DMC.Client
         public async Task RunInteractive()
         {
             Console.WriteLine($"Connected to DMC Server. (client-id: {_clientId})");
-            Console.WriteLine("Commands: define-type, schema, set, search, print, printall, batch, count, contains, help, quit");
+            Console.WriteLine("Commands: define-type, update-schema, schema, set, search, print, printall, batch, count, contains, help, quit");
             Console.WriteLine();
 
             bool running = true;
@@ -47,6 +47,9 @@ namespace DMC.Client
                     {
                         case "define-type":
                             await HandleDefineType();
+                            break;
+                        case "update-schema":
+                            await HandleUpdateSchema();
                             break;
                         case "schema":
                             await HandleGetSchema();
@@ -135,6 +138,32 @@ namespace DMC.Client
                 Console.WriteLine($"  {response.Type}: IdentityKeys=[{string.Join(", ", response.IdentityKeys)}]");
             else
                 Console.WriteLine($"  Type '{type}' not defined.");
+        }
+
+        private async Task HandleUpdateSchema()
+        {
+            Console.Write("  Type: ");
+            string? type = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(type)) return;
+
+            Console.Write("  New IdentityKeys (comma-separated): ");
+            string? keys = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(keys)) return;
+
+            var newKeys = keys.Split(',').Select(k => k.Trim()).Where(k => k.Length > 0).ToList();
+            if (newKeys.Count == 0) return;
+
+            var request = new UpdateTypeSchemaRequest { Type = type };
+            request.NewIdentityKeys.AddRange(newKeys);
+
+            var response = await _client.UpdateTypeSchemaAsync(request, Headers);
+            Console.WriteLine($"  {response.Message}");
+            if (response.Conflicts.Count > 0)
+            {
+                Console.WriteLine("  Conflicts:");
+                foreach (var c in response.Conflicts)
+                    Console.WriteLine($"    {c.KeyA} ↔ {c.KeyB}");
+            }
         }
 
         // =================================================================
@@ -300,8 +329,9 @@ namespace DMC.Client
         private void PrintHelp()
         {
             Console.WriteLine("  Schema Commands:");
-            Console.WriteLine("    define-type - Define IdentityKeys for a Type (one-time)");
-            Console.WriteLine("    schema      - View IdentityKeys for a Type");
+            Console.WriteLine("    define-type   - Define IdentityKeys for a Type (one-time)");
+            Console.WriteLine("    update-schema - Update IdentityKeys for a Type (validates collisions)");
+            Console.WriteLine("    schema        - View IdentityKeys for a Type");
             Console.WriteLine("  Data Commands:");
             Console.WriteLine("    set         - Set a Data Element (Server decides create/update)");
             Console.WriteLine("    search      - Search elements by type and/or properties");
