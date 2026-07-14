@@ -11,6 +11,7 @@ Core server logic — the Singleton DMC Server that manages all Data Elements.
 | File | Type | Purpose |
 |------|------|---------|
 | `DMCServer.cs` | Class | Singleton server with Schema (DefineType) + Data (Set/Search/Print) operations |
+| `CommitLog.cs` | Class | Kafka-style append-only commit log for persistence |
 | `DMCGrpcService.cs` | Class | gRPC service implementation (maps RPCs to DMCServer) with structured logging |
 | `DMCClient.cs` | Class | Interactive gRPC client with client-id support |
 
@@ -88,6 +89,49 @@ With clone:    Search() → lock → copy Properties → unlock → iterate safe
 ```
 
 Lock protects the *access*, not the *usage*. Data leaving the lock must be a snapshot.
+
+## CommitLog (Kafka-style Persistence)
+
+**Design principle**: Log is the source of truth, _registry is a derived view.
+
+```text
+CommitLog
+├── _logPath: string              ← ~/.dmc/dmc_commit.log
+├── _currentOffset: long          ← monotonically increasing
+├── _fileLock: object             ← file write safety
+│
+├── Append(operation, type, ...)  ← Write before memory (WAL)
+├── ReadAll()                     ← Replay on startup
+└── Compact()                     ← Keep latest per key (Kafka-style)
+```
+
+### Integration with DMCServer
+
+Every write operation follows the WAL pattern:
+
+```text
+Set():
+    lock(_lock):
+        1. _commitLog.Append(...)   ← disk write first (persist)
+        2. _registry.Add(...)       ← memory write second (derived)
+        3. return result
+
+Crash at step 2? → Log has the entry, replay recovers it.
+Crash at step 1? → Nothing written, nothing to recover. Consistent.
+```
+
+### Replay on Startup
+
+```text
+EnableCommitLog(path):
+    for each entry in CommitLog.ReadAll():
+        switch entry.Operation:
+            DefineType    → _typeSchemas[type] = identityKeys
+            Set           → identity match → create or update element
+            Update        → update properties
+            UpdateSchema  → update schema + rebuild identity index
+    SyncCounter() → ensure auto-increment doesn't collide after restart
+```
 
 ## DMCGrpcService (V2)
 

@@ -28,7 +28,9 @@ camtek_kaijaytu/
     ├── test_main.cpp       # C++ fault injection tests
     ├── HardwareLogicConcurrencyTests.cs  # C# concurrency stress tests
     ├── GrpcIntegrationTests.cs           # gRPC integration tests
-    ├── DMC.Tests.csproj                  # .NET test project (unit/concurrency)
+    ├── DMCServerTests.cs                 # C# unit tests (schema, set, search, concurrency, commitlog)
+    ├── DMC.Tests.csproj                  # .NET test project (concurrency)
+    ├── DMC.UnitTests.csproj              # .NET test project (unit tests)
     └── DMC.IntegrationTests.csproj       # .NET test project (integration)
 ```
 
@@ -177,3 +179,54 @@ Client Input (set command)
 | Three execution modes | Flexible: network service, remote client, or standalone |
 | P/Invoke Bridge | Cross-language C# ↔ C++ communication |
 | Self-contained publish | No .NET runtime needed on deployment target |
+| **Kafka-style CommitLog** | Append-only log is the source of truth. In-memory registry is a derived view rebuilt by replaying the log on startup. Enables crash recovery without data loss. |
+| **Log Compaction** | Kafka-style: keep only the latest entry per key, reducing log size while preserving final state. |
+| **Unit Separator in identity index** | Uses ASCII `\x1F` instead of `:` as delimiter in identity index keys, preventing collision when property values contain `:` (e.g., MAC addresses). |
+
+## Persistence (Kafka-style Commit Log)
+
+All write operations (DefineType, Set, Update, UpdateTypeSchema) are appended to a commit log before modifying in-memory state. The log is the **source of truth**.
+
+```
+Write path:  Client → CommitLog.Append() → disk write → _registry update → response
+Read path:   Client → _registry (in-memory, fast)
+Recovery:    Server restart → CommitLog.ReplayAll() → rebuild _registry from log
+Maintenance: CompactLog() → keep only latest entry per key
+```
+
+### Data Directory
+
+| Priority | Path | Use case |
+|----------|------|----------|
+| 1st | `DMC_DATA_DIR` env var | Custom path (e.g., `/var/lib/dmc`) |
+| 2nd | `~/.dmc/` | Default — user home, always writable |
+
+```bash
+# Development (default)
+./DMC --server --port 5050
+# Commit log: ~/.dmc/dmc_commit.log
+
+# Production (custom path)
+DMC_DATA_DIR=/var/lib/dmc ./DMC --server --port 5050
+# Commit log: /var/lib/dmc/dmc_commit.log
+```
+
+> **TODO**: Production deployment should use `/var/lib/dmc/` per FHS standard, with `sudo chown <user> /var/lib/dmc`.
+
+### Log Format
+
+One JSON object per line (append-only):
+
+```json
+{"offset":0,"timestamp":"...","operation":"DefineType","type":"Car","identityKeys":["VIN"]}
+{"offset":1,"timestamp":"...","operation":"Set","type":"Car","key":"Car:1","owner":"alice","properties":{"VIN":"ABC"},"merge":true}
+```
+
+### Compaction
+
+After many updates to the same element, the log grows. Compaction keeps only the latest entry per key:
+
+```
+Before: 51 entries (1 DefineType + 50 updates to same sensor)
+After:   2 entries (1 DefineType + 1 latest sensor state)
+```
