@@ -61,11 +61,14 @@ namespace DMC.Core
             if (identityKeys == null || identityKeys.Count == 0)
                 throw new ArgumentException("IdentityKeys is required.", nameof(identityKeys));
 
-            if (_typeSchemas.ContainsKey(type))
-                return false;
+            lock (_lock)
+            {
+                if (_typeSchemas.ContainsKey(type))
+                    return false;
 
-            _typeSchemas[type] = new List<string>(identityKeys);
-            return true;
+                _typeSchemas[type] = new List<string>(identityKeys);
+                return true;
+            }
         }
 
         /// <summary>
@@ -73,7 +76,11 @@ namespace DMC.Core
         /// </summary>
         public List<string>? GetTypeSchema(string type)
         {
-            return _typeSchemas.TryGetValue(type, out var schema) ? schema : null;
+            lock (_lock)
+            {
+                return _typeSchemas.TryGetValue(type, out var schema)
+                    ? new List<string>(schema) : null;
+            }
         }
 
         // =================================================================
@@ -99,32 +106,35 @@ namespace DMC.Core
                     throw new ArgumentException($"IdentityKey '{idKey}' not found in properties.");
             }
 
-            // Case 1: Explicit update by key
-            if (!string.IsNullOrEmpty(existingKey))
+            lock (_lock)
             {
-                if (!_registry.ContainsKey(existingKey))
+                // Case 1: Explicit update by key
+                if (!string.IsNullOrEmpty(existingKey))
+                {
+                    if (!_registry.ContainsKey(existingKey))
+                        return new SetResult(SetAction.Updated, existingKey);
+
+                    UpdateProperties(existingKey, properties, merge);
+                    UpdateIdentityIndex(existingKey, type, properties, identityKeys);
                     return new SetResult(SetAction.Updated, existingKey);
+                }
 
-                UpdateProperties(existingKey, properties, merge);
-                UpdateIdentityIndex(existingKey, type, properties, identityKeys);
-                return new SetResult(SetAction.Updated, existingKey);
+                // Case 2: Check identity index for match
+                string identityKey = BuildIdentityKey(type, properties, identityKeys);
+
+                if (_identityIndex.TryGetValue(identityKey, out var matchedKey))
+                {
+                    UpdateProperties(matchedKey, properties, merge);
+                    return new SetResult(SetAction.Updated, matchedKey);
+                }
+
+                // Case 3: No match → Create new element
+                string newKey = GenerateKey(type);
+                var element = new GenericDataElement(type, new Dictionary<string, string>(properties), newKey);
+                _registry.Add(newKey, element);
+                _identityIndex[identityKey] = newKey;
+                return new SetResult(SetAction.Created, newKey);
             }
-
-            // Case 2: Check identity index for match
-            string identityKey = BuildIdentityKey(type, properties, identityKeys);
-
-            if (_identityIndex.TryGetValue(identityKey, out var matchedKey))
-            {
-                UpdateProperties(matchedKey, properties, merge);
-                return new SetResult(SetAction.Updated, matchedKey);
-            }
-
-            // Case 3: No match → Create new element
-            string newKey = GenerateKey(type);
-            var element = new GenericDataElement(type, new Dictionary<string, string>(properties), newKey);
-            _registry.Add(newKey, element);
-            _identityIndex[identityKey] = newKey;
-            return new SetResult(SetAction.Created, newKey);
         }
 
         /// <summary>
@@ -132,17 +142,20 @@ namespace DMC.Core
         /// </summary>
         public bool Update(string key, Dictionary<string, string> properties, bool merge = true)
         {
-            if (!_registry.ContainsKey(key))
-                return false;
-
-            UpdateProperties(key, properties, merge);
-
-            var element = _registry[key];
-            if (_typeSchemas.TryGetValue(element.Type, out var identityKeys))
+            lock (_lock)
             {
-                UpdateIdentityIndex(key, element.Type, properties, identityKeys);
+                if (!_registry.ContainsKey(key))
+                    return false;
+
+                UpdateProperties(key, properties, merge);
+
+                var element = _registry[key];
+                if (_typeSchemas.TryGetValue(element.Type, out var identityKeys))
+                {
+                    UpdateIdentityIndex(key, element.Type, properties, identityKeys);
+                }
+                return true;
             }
-            return true;
         }
 
         /// <summary>
@@ -150,37 +163,49 @@ namespace DMC.Core
         /// </summary>
         public IEnumerable<IDataElement> Search(string? type, Dictionary<string, string> filters)
         {
-            return _registry.Values
-                .Where(e => e.Matches(type, filters))
-                .ToList();
+            lock (_lock)
+            {
+                return _registry.Values
+                    .Where(e => e.Matches(type, filters))
+                    .ToList();
+            }
         }
 
         public bool Print(string key)
         {
-            if (_registry.TryGetValue(key, out var element))
+            lock (_lock)
             {
-                element.Print();
-                return true;
+                if (_registry.TryGetValue(key, out var element))
+                {
+                    element.Print();
+                    return true;
+                }
+                return false;
             }
-            return false;
         }
 
         public void PrintAll()
         {
-            foreach (var element in _registry.Values)
-                element.Print();
+            lock (_lock)
+            {
+                foreach (var element in _registry.Values)
+                    element.Print();
+            }
         }
 
-        public bool Contains(string key) => _registry.ContainsKey(key);
-        public int Count => _registry.Count;
+        public bool Contains(string key) { lock (_lock) { return _registry.ContainsKey(key); } }
+        public int Count { get { lock (_lock) { return _registry.Count; } } }
 
         public IDataElement? Get(string key)
         {
-            _registry.TryGetValue(key, out var element);
-            return element;
+            lock (_lock)
+            {
+                _registry.TryGetValue(key, out var element);
+                return element;
+            }
         }
 
-        public IEnumerable<IDataElement> GetAll() => _registry.Values.ToList();
+        public IEnumerable<IDataElement> GetAll() { lock (_lock) { return _registry.Values.ToList(); } }
 
         // =================================================================
         // Internal Helpers
