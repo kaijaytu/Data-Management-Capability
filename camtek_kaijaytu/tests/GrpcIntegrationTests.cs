@@ -356,6 +356,140 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Concurrency Tests (via gRPC — tests Server thread safety end-to-end)
+        // =====================================================================
+
+        /// <summary>
+        /// T-16: 50 concurrent SetElement with unique identities via gRPC.
+        /// </summary>
+        public async Task T16_ConcurrentSetUnique()
+        {
+            Console.WriteLine("=== T-16: Concurrent Set (50 gRPC clients, unique DeviceId) ===");
+
+            // DefineType "ConcTest" if not already defined
+            var defineReq = new DefineTypeRequest { Type = "ConcTest" };
+            defineReq.IdentityKeys.Add("DeviceId");
+            await _client.DefineTypeAsync(defineReq);
+
+            int countBefore = (await _client.GetCountAsync(new Empty())).Count;
+
+            int threadCount = 50;
+            int successCount = 0;
+            var tasks = new List<Task>();
+
+            for (int i = 0; i < threadCount; i++)
+            {
+                int idx = i;
+                tasks.Add(Task.Run(async () =>
+                {
+                    var req = new SetElementRequest { Type = "ConcTest" };
+                    req.Properties.Add(new KeyValuePair { Key = "DeviceId", Value = $"CONC-{idx:D4}" });
+                    req.Properties.Add(new KeyValuePair { Key = "Value", Value = $"{idx}" });
+
+                    var resp = await _client.SetElementAsync(req);
+                    if (resp.Success) Interlocked.Increment(ref successCount);
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+
+            int countAfter = (await _client.GetCountAsync(new Empty())).Count;
+            int created = countAfter - countBefore;
+
+            Assert(successCount == threadCount, $"All {threadCount} should succeed, got {successCount}");
+            Assert(created == threadCount, $"Should create {threadCount} elements, got {created}");
+            Console.WriteLine($"  Success: {successCount}, Created: {created}");
+            Console.WriteLine();
+        }
+
+        /// <summary>
+        /// T-17: 50 concurrent SetElement with SAME identity via gRPC.
+        /// Only 1 should be Created, rest Updated.
+        /// </summary>
+        public async Task T17_ConcurrentSetSameIdentity()
+        {
+            Console.WriteLine("=== T-17: Concurrent Set Same Identity (50 gRPC clients, same DeviceId) ===");
+
+            int threadCount = 50;
+            int createdCount = 0;
+            int updatedCount = 0;
+            var tasks = new List<Task>();
+
+            for (int i = 0; i < threadCount; i++)
+            {
+                int idx = i;
+                tasks.Add(Task.Run(async () =>
+                {
+                    var req = new SetElementRequest { Type = "ConcTest" };
+                    req.Properties.Add(new KeyValuePair { Key = "DeviceId", Value = "RACE-SAME-001" });
+                    req.Properties.Add(new KeyValuePair { Key = "Iteration", Value = $"{idx}" });
+
+                    var resp = await _client.SetElementAsync(req);
+                    if (resp.Action == SetAction.Created) Interlocked.Increment(ref createdCount);
+                    else if (resp.Action == SetAction.Updated) Interlocked.Increment(ref updatedCount);
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+
+            Assert(createdCount == 1, $"Exactly 1 should be Created, got {createdCount}");
+            Assert(updatedCount == threadCount - 1, $"{threadCount - 1} should be Updated, got {updatedCount}");
+            Console.WriteLine($"  Created: {createdCount}, Updated: {updatedCount}");
+            Console.WriteLine();
+        }
+
+        /// <summary>
+        /// T-18: Mixed concurrent reads and writes via gRPC.
+        /// </summary>
+        public async Task T18_ConcurrentReadWrite()
+        {
+            Console.WriteLine("=== T-18: Concurrent Read/Write Mix (100 ops via gRPC) ===");
+
+            int totalOps = 100;
+            int readSuccess = 0;
+            int writeSuccess = 0;
+            int errors = 0;
+            var tasks = new List<Task>();
+
+            for (int i = 0; i < totalOps; i++)
+            {
+                int idx = i;
+                tasks.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (idx % 2 == 0)
+                        {
+                            // Write
+                            var req = new SetElementRequest { Type = "ConcTest" };
+                            req.Properties.Add(new KeyValuePair { Key = "DeviceId", Value = $"CONC-{idx % 20:D4}" });
+                            req.Properties.Add(new KeyValuePair { Key = "Reading", Value = $"{idx * 1.1}" });
+                            var resp = await _client.SetElementAsync(req);
+                            if (resp.Success) Interlocked.Increment(ref writeSuccess);
+                        }
+                        else
+                        {
+                            // Read
+                            var resp = await _client.SearchAsync(new SearchRequest { Type = "ConcTest" });
+                            if (resp.TotalFound >= 0) Interlocked.Increment(ref readSuccess);
+                        }
+                    }
+                    catch
+                    {
+                        Interlocked.Increment(ref errors);
+                    }
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+
+            Assert(errors == 0, $"No errors, got {errors}");
+            Assert(readSuccess + writeSuccess == totalOps, $"All {totalOps} ops should complete, got {readSuccess + writeSuccess}");
+            Console.WriteLine($"  Reads: {readSuccess}, Writes: {writeSuccess}, Errors: {errors}");
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -378,6 +512,9 @@ namespace DMC.Tests
             await T13_PrintAll();
             await T14_BatchSet();
             await T15_FinalCount();
+            await T16_ConcurrentSetUnique();
+            await T17_ConcurrentSetSameIdentity();
+            await T18_ConcurrentReadWrite();
 
             sw.Stop();
             Console.WriteLine("══════════════════════════════════════════════════════");
