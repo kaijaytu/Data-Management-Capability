@@ -90,6 +90,7 @@ message SetElementResponse {
   string key = 2;
   SetAction action = 3;
   string message = 4;
+  string owner = 5;
 }
 
 // --- Search messages ---
@@ -97,6 +98,7 @@ message SetElementResponse {
 message SearchRequest {
   string type = 1;                    // Optional: filter by type
   repeated KeyValuePair filters = 2;  // Optional: filter by property subset
+  string owner = 3;                   // Optional: filter by owner
 }
 
 message SearchResponse {
@@ -122,6 +124,7 @@ message DataElementMessage {
   string type = 2;
   repeated KeyValuePair properties = 3;
   string display = 4;
+  string owner = 5;
 }
 
 // --- Batch messages ---

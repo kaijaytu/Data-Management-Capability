@@ -490,6 +490,61 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Multi-User Tests
+        // =====================================================================
+
+        /// <summary>
+        /// T-19: Verify owner is tracked and returned in SetElement response.
+        /// </summary>
+        public async Task T19_OwnerTracking()
+        {
+            Console.WriteLine("=== T-19: Owner Tracking via gRPC ===");
+
+            // Our client sends with client-id from metadata (default: "client-{pid}")
+            // Create a new element and verify owner is returned
+            var defineReq = new DefineTypeRequest { Type = "OwnerTest" };
+            defineReq.IdentityKeys.Add("Id");
+            await _client.DefineTypeAsync(defineReq);
+
+            var setReq = new SetElementRequest { Type = "OwnerTest" };
+            setReq.Properties.Add(new KeyValuePair { Key = "Id", Value = "OT-001" });
+            setReq.Properties.Add(new KeyValuePair { Key = "Data", Value = "hello" });
+
+            var setResp = await _client.SetElementAsync(setReq);
+            Assert(setResp.Success, "Set should succeed");
+            Assert(!string.IsNullOrEmpty(setResp.Owner), $"Owner should not be empty, got '{setResp.Owner}'");
+            Console.WriteLine($"  Created: {setResp.Key}, Owner: {setResp.Owner}");
+
+            // Search and verify owner in DataElementMessage
+            var searchResp = await _client.SearchAsync(new SearchRequest { Type = "OwnerTest" });
+            Assert(searchResp.Results.Count == 1, "Should find 1 OwnerTest element");
+            Assert(!string.IsNullOrEmpty(searchResp.Results[0].Owner),
+                $"Owner in search result should not be empty, got '{searchResp.Results[0].Owner}'");
+            Console.WriteLine($"  Search result owner: {searchResp.Results[0].Owner}");
+            Console.WriteLine();
+        }
+
+        /// <summary>
+        /// T-20: Verify search by owner filter works via gRPC.
+        /// </summary>
+        public async Task T20_SearchByOwner()
+        {
+            Console.WriteLine("=== T-20: Search by Owner via gRPC ===");
+
+            // Search with owner filter matching our client-id
+            var resp = await _client.SearchAsync(new SearchRequest { Type = "OwnerTest", Owner = "anonymous" });
+            // Integration tests don't set client-id header by default, so owner = "anonymous"
+            // If our elements were created as "anonymous", this should find them
+            Console.WriteLine($"  Search owner=anonymous: {resp.TotalFound} found");
+
+            // Search with non-existing owner
+            var resp2 = await _client.SearchAsync(new SearchRequest { Owner = "nonexistent" });
+            Assert(resp2.TotalFound == 0, $"Non-existing owner should find 0, got {resp2.TotalFound}");
+            Console.WriteLine($"  Search owner=nonexistent: {resp2.TotalFound} found");
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -515,6 +570,8 @@ namespace DMC.Tests
             await T16_ConcurrentSetUnique();
             await T17_ConcurrentSetSameIdentity();
             await T18_ConcurrentReadWrite();
+            await T19_OwnerTracking();
+            await T20_SearchByOwner();
 
             sw.Stop();
             Console.WriteLine("══════════════════════════════════════════════════════");

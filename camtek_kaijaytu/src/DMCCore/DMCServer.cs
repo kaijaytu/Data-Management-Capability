@@ -91,8 +91,9 @@ namespace DMC.Core
         /// Set a Data Element. Server decides Create or Update based on identity matching.
         /// - No key: check identity index → match found = Update, no match = Create
         /// - With key: explicit update by key
+        /// Owner is recorded on creation for tracking purposes.
         /// </summary>
-        public SetResult Set(string type, Dictionary<string, string> properties, string? existingKey = null, bool merge = true)
+        public SetResult Set(string type, Dictionary<string, string> properties, string? existingKey = null, bool merge = true, string owner = "")
         {
             if (string.IsNullOrWhiteSpace(type))
                 throw new ArgumentException("Type cannot be empty.", nameof(type));
@@ -128,9 +129,9 @@ namespace DMC.Core
                     return new SetResult(SetAction.Updated, matchedKey);
                 }
 
-                // Case 3: No match → Create new element
+                // Case 3: No match → Create new element with owner
                 string newKey = GenerateKey(type);
-                var element = new GenericDataElement(type, new Dictionary<string, string>(properties), newKey);
+                var element = new GenericDataElement(type, new Dictionary<string, string>(properties), newKey, owner);
                 _registry.Add(newKey, element);
                 _identityIndex[identityKey] = newKey;
                 return new SetResult(SetAction.Created, newKey);
@@ -160,14 +161,18 @@ namespace DMC.Core
 
         /// <summary>
         /// Search for elements matching a filter (subset match via ISearchable).
+        /// Optionally filter by owner.
         /// </summary>
-        public IEnumerable<IDataElement> Search(string? type, Dictionary<string, string> filters)
+        public IEnumerable<IDataElement> Search(string? type, Dictionary<string, string> filters, string? owner = null)
         {
             lock (_lock)
             {
-                return _registry.Values
-                    .Where(e => e.Matches(type, filters))
-                    .ToList();
+                var query = _registry.Values.Where(e => e.Matches(type, filters));
+
+                if (!string.IsNullOrEmpty(owner))
+                    query = query.Where(e => e is GenericDataElement g && g.Owner == owner);
+
+                return query.ToList();
             }
         }
 

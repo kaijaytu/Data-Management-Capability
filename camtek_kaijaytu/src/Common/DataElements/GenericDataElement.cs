@@ -9,13 +9,15 @@ namespace DMC.Common.DataElements
     {
         public string Type { get; }
         public string Key { get; set; }
+        public string Owner { get; set; }
         public Dictionary<string, string> Properties { get; set; }
 
-        public GenericDataElement(string type, Dictionary<string, string> properties, string key = "")
+        public GenericDataElement(string type, Dictionary<string, string> properties, string key = "", string owner = "")
         {
             Type = type;
             Properties = properties;
             Key = key;
+            Owner = owner;
         }
 
         /// <summary>
@@ -59,7 +61,8 @@ namespace DMC.Common.DataElements
         public string ToDisplayString()
         {
             var pairs = Properties.Select(p => $"{p.Key}={p.Value}");
-            return $"[{Type}] {string.Join(", ", pairs)}  (Key: {Key})";
+            string ownerTag = string.IsNullOrEmpty(Owner) ? "" : $" @{Owner}";
+            return $"[{Type}] {string.Join(", ", pairs)}  (Key: {Key}{ownerTag})";
         }
     }
 }

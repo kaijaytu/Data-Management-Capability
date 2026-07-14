@@ -489,6 +489,76 @@ namespace DMC.Tests
         }
 
         // =====================================================================
+        // Multi-User / Ownership Tests
+        // =====================================================================
+
+        public void S22_OwnerTracking()
+        {
+            Console.WriteLine("=== S-22: Owner Tracking ===");
+            DMCServer.ResetInstance();
+            var server = DMCServer.Instance;
+            server.DefineType("Car", new List<string> { "VIN" });
+
+            // Alice creates a car
+            var r1 = server.Set("Car", new Dictionary<string, string>
+            {
+                ["VIN"] = "VIN-ALICE-001",
+                ["Make"] = "Toyota"
+            }, owner: "alice");
+
+            Assert(r1.Action == SetAction.Created, "Alice's car should be Created");
+
+            var element1 = server.Get(r1.Key) as GenericDataElement;
+            Assert(element1!.Owner == "alice", $"Owner should be alice, got {element1.Owner}");
+
+            // Bob creates a car
+            var r2 = server.Set("Car", new Dictionary<string, string>
+            {
+                ["VIN"] = "VIN-BOB-001",
+                ["Make"] = "Honda"
+            }, owner: "bob");
+
+            var element2 = server.Get(r2.Key) as GenericDataElement;
+            Assert(element2!.Owner == "bob", $"Owner should be bob, got {element2.Owner}");
+
+            // Bob updates Alice's car (collaborative — allowed)
+            server.Update(r1.Key, new Dictionary<string, string> { ["Color"] = "Red" });
+            var updated = server.Get(r1.Key) as GenericDataElement;
+            Assert(updated!.Owner == "alice", "Owner should remain alice after update by bob");
+            Assert(updated.Properties["Color"] == "Red", "Color should be updated");
+
+            Console.WriteLine($"  Alice's car: {element1.ToDisplayString()}");
+            Console.WriteLine($"  Bob's car: {element2.ToDisplayString()}");
+            Console.WriteLine();
+        }
+
+        public void S23_SearchByOwner()
+        {
+            Console.WriteLine("=== S-23: Search by Owner ===");
+            var server = DMCServer.Instance; // continues from S22
+
+            // Search all cars
+            var allCars = server.Search("Car", new Dictionary<string, string>()).ToList();
+            Assert(allCars.Count == 2, $"Should find 2 cars total, got {allCars.Count}");
+
+            // Search only Alice's cars
+            var aliceCars = server.Search("Car", new Dictionary<string, string>(), owner: "alice").ToList();
+            Assert(aliceCars.Count == 1, $"Alice should have 1 car, got {aliceCars.Count}");
+            Assert((aliceCars[0] as GenericDataElement)!.Properties["Make"] == "Toyota",
+                "Alice's car should be Toyota");
+
+            // Search only Bob's cars
+            var bobCars = server.Search("Car", new Dictionary<string, string>(), owner: "bob").ToList();
+            Assert(bobCars.Count == 1, $"Bob should have 1 car, got {bobCars.Count}");
+
+            // Search non-existing owner
+            var nobody = server.Search("Car", new Dictionary<string, string>(), owner: "nobody").ToList();
+            Assert(nobody.Count == 0, $"Nobody should have 0 cars, got {nobody.Count}");
+
+            Console.WriteLine();
+        }
+
+        // =====================================================================
         // Runner
         // =====================================================================
 
@@ -517,6 +587,8 @@ namespace DMC.Tests
             S19_ConcurrentSetSameIdentity();
             S20_ConcurrentReadWrite();
             S21_ConcurrentDefineType();
+            S22_OwnerTracking();
+            S23_SearchByOwner();
 
             sw.Stop();
 

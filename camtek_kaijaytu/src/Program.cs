@@ -82,6 +82,11 @@ namespace DMC
                 });
             });
 
+            // Suppress noisy ASP.NET Core framework logs, keep only our custom logs
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
             builder.Services.AddGrpc();
 
             var app = builder.Build();
@@ -116,9 +121,18 @@ namespace DMC
         {
             Console.WriteLine("=== DMC Client ===");
             Console.WriteLine($"Connecting to: {address}");
-            Console.WriteLine();
 
-            var client = new DMCClient(address);
+            // Parse --client-id option
+            string clientId = "";
+            var args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--client-id" && i + 1 < args.Length)
+                    clientId = args[i + 1];
+            }
+
+            Console.WriteLine();
+            var client = new DMCClient(address, clientId);
             await client.RunInteractive();
         }
 

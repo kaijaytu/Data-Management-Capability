@@ -22,9 +22,15 @@ namespace DMC.Core
         private static string Timestamp => DateTime.Now.ToString("HH:mm:ss.fff");
         private static string Peer(ServerCallContext ctx) => ctx.Peer ?? "unknown";
 
+        private static string GetClientId(ServerCallContext ctx)
+        {
+            var entry = ctx.RequestHeaders.FirstOrDefault(h => h.Key == "client-id");
+            return entry?.Value ?? "anonymous";
+        }
+
         private static void Log(string action, string detail, ServerCallContext ctx)
         {
-            Console.WriteLine($"  [{Timestamp}] [{Peer(ctx)}] {action,-14} {detail}");
+            Console.WriteLine($"  [{Timestamp}] [{GetClientId(ctx)}@{Peer(ctx)}] {action,-14} {detail}");
         }
 
         // =================================================================
@@ -98,7 +104,7 @@ namespace DMC.Core
                 }
 
                 // No key → Server decides via identity matching
-                var result = _server.Set(request.Type, props, null, merge);
+                var result = _server.Set(request.Type, props, null, merge, GetClientId(context));
 
                 var grpcAction = result.Action switch
                 {
@@ -114,12 +120,13 @@ namespace DMC.Core
                     _ => "OK"
                 };
 
-                Log("SET", $"{result.Action,-8} key={result.Key} type={request.Type} (count={_server.Count})", context);
+                Log("SET", $"{result.Action,-8} key={result.Key} type={request.Type} owner={GetClientId(context)} (count={_server.Count})", context);
 
                 return Task.FromResult(new SetElementResponse
                 {
                     Success = true, Key = result.Key,
-                    Action = grpcAction, Message = message
+                    Action = grpcAction, Message = message,
+                    Owner = GetClientId(context)
                 });
             }
             catch (Exception ex)
@@ -133,8 +140,9 @@ namespace DMC.Core
         {
             var filters = request.Filters.ToDictionary(f => f.Key, f => f.Value);
             string? type = string.IsNullOrEmpty(request.Type) ? null : request.Type;
+            string? owner = string.IsNullOrEmpty(request.Owner) ? null : request.Owner;
 
-            var results = _server.Search(type, filters);
+            var results = _server.Search(type, filters, owner);
             var response = new SearchResponse();
 
             foreach (var element in results)
@@ -142,7 +150,8 @@ namespace DMC.Core
                 var msg = new DataElementMessage
                 {
                     Key = element.Key, Type = element.Type,
-                    Display = element.ToDisplayString()
+                    Display = element.ToDisplayString(),
+                    Owner = (element is GenericDataElement g) ? g.Owner : ""
                 };
                 if (element is GenericDataElement generic)
                 {
@@ -185,7 +194,8 @@ namespace DMC.Core
                 var msg = new DataElementMessage
                 {
                     Key = element.Key, Type = element.Type,
-                    Display = element.ToDisplayString()
+                    Display = element.ToDisplayString(),
+                    Owner = (element is GenericDataElement ge) ? ge.Owner : ""
                 };
                 if (element is GenericDataElement generic)
                 {
@@ -200,8 +210,9 @@ namespace DMC.Core
         {
             int totalReceived = 0, totalCreated = 0, totalUpdated = 0;
             var keys = new List<string>();
+            string clientId = GetClientId(context);
 
-            Log("BATCH_SET", "stream started", context);
+            Log("BATCH_SET", $"stream started (client={clientId})", context);
 
             await foreach (var request in requestStream.ReadAllAsync(context.CancellationToken))
             {
@@ -211,7 +222,7 @@ namespace DMC.Core
 
                 try
                 {
-                    var result = _server.Set(request.Type, props, null, merge);
+                    var result = _server.Set(request.Type, props, null, merge, clientId);
                     if (result.Action == Core.SetAction.Created) totalCreated++;
                     else totalUpdated++;
                     keys.Add(result.Key);

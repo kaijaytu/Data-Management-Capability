@@ -13,16 +13,22 @@ namespace DMC.Client
     {
         private readonly DMCService.DMCServiceClient _client;
         private readonly GrpcChannel _channel;
+        private readonly string _clientId;
 
-        public DMCClient(string serverAddress)
+        public DMCClient(string serverAddress, string clientId = "")
         {
             _channel = GrpcChannel.ForAddress(serverAddress);
             _client = new DMCService.DMCServiceClient(_channel);
+            _clientId = string.IsNullOrEmpty(clientId)
+                ? $"client-{Environment.ProcessId}"
+                : clientId;
         }
+
+        private Metadata Headers => new Metadata { { "client-id", _clientId } };
 
         public async Task RunInteractive()
         {
-            Console.WriteLine($"Connected to DMC Server.");
+            Console.WriteLine($"Connected to DMC Server. (client-id: {_clientId})");
             Console.WriteLine("Commands: define-type, schema, set, search, print, printall, batch, count, contains, help, quit");
             Console.WriteLine();
 
@@ -114,7 +120,7 @@ namespace DMC.Client
             var request = new DefineTypeRequest { Type = type };
             request.IdentityKeys.AddRange(identityKeys);
 
-            var response = await _client.DefineTypeAsync(request);
+            var response = await _client.DefineTypeAsync(request, Headers);
             Console.WriteLine($"  {response.Message}");
         }
 
@@ -124,7 +130,7 @@ namespace DMC.Client
             string? type = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(type)) return;
 
-            var response = await _client.GetTypeSchemaAsync(new GetTypeSchemaRequest { Type = type });
+            var response = await _client.GetTypeSchemaAsync(new GetTypeSchemaRequest { Type = type }, Headers);
             if (response.Found)
                 Console.WriteLine($"  {response.Type}: IdentityKeys=[{string.Join(", ", response.IdentityKeys)}]");
             else
@@ -152,7 +158,7 @@ namespace DMC.Client
                 request.Key = key;
             request.Properties.AddRange(props);
 
-            var response = await _client.SetElementAsync(request);
+            var response = await _client.SetElementAsync(request, Headers);
             Console.WriteLine($"  Action: {response.Action}");
             Console.WriteLine($"  Key: {response.Key}");
             Console.WriteLine($"  Message: {response.Message}");
@@ -171,7 +177,7 @@ namespace DMC.Client
                 request.Type = type;
             request.Filters.AddRange(filters);
 
-            var response = await _client.SearchAsync(request);
+            var response = await _client.SearchAsync(request, Headers);
             Console.WriteLine($"  --- Results ({response.TotalFound} found) ---");
             foreach (var msg in response.Results)
                 Console.WriteLine($"  [{msg.Key}] {msg.Display}");
@@ -183,7 +189,7 @@ namespace DMC.Client
             string? key = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(key)) return;
 
-            var response = await _client.PrintAsync(new PrintRequest { Key = key });
+            var response = await _client.PrintAsync(new PrintRequest { Key = key }, Headers);
             if (response.Found)
                 Console.WriteLine($"  {response.Display}");
             else
@@ -195,7 +201,7 @@ namespace DMC.Client
             Console.WriteLine("  --- All Elements (streaming) ---");
             int count = 0;
 
-            using var call = _client.PrintAll(new PrintAllRequest());
+            using var call = _client.PrintAll(new PrintAllRequest(), Headers);
             await foreach (var msg in call.ResponseStream.ReadAllAsync())
             {
                 Console.WriteLine($"  {msg.Display}");
@@ -233,7 +239,7 @@ namespace DMC.Client
 
             Console.WriteLine($"  Sending {requests.Count} elements...");
 
-            using var call = _client.BatchSet();
+            using var call = _client.BatchSet(Headers);
             foreach (var req in requests)
                 await call.RequestStream.WriteAsync(req);
             await call.RequestStream.CompleteAsync();
@@ -246,7 +252,7 @@ namespace DMC.Client
 
         private async Task HandleCount()
         {
-            var response = await _client.GetCountAsync(new Empty());
+            var response = await _client.GetCountAsync(new Empty(), Headers);
             Console.WriteLine($"  Elements in system: {response.Count}");
         }
 
@@ -256,7 +262,7 @@ namespace DMC.Client
             string? key = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(key)) return;
 
-            var response = await _client.ContainsAsync(new ContainsRequest { Key = key });
+            var response = await _client.ContainsAsync(new ContainsRequest { Key = key }, Headers);
             Console.WriteLine($"  Exists: {response.Exists}");
         }
 
