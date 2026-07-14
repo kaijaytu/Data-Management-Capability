@@ -10,40 +10,79 @@ Shared interfaces and abstractions used across the entire DMC system.
 
 | File | Type | Purpose |
 |------|------|---------|
-| `IDataElement.cs` | Interfaces | Defines `IKeyIdentifiable`, `IPrintable`, and `IDataElement` |
+| `IDataElement.cs` | Interfaces | Defines `IIdentifiable`, `ISearchable`, `IPrintable`, and `IDataElement` |
 | `DataElements/GenericDataElement.cs` | Class | Universal implementation that accepts any type |
 
-## Interface Hierarchy
+## Interface Hierarchy (V2)
 
-```text
-IKeyIdentifiable          IPrintable
-│                         │
-│ + GetKey(): string      │ + Print(): void
-│                         │ + ToDisplayString(): string
-└────────┐       ┌────────┘
-         ↓       ↓
-      IDataElement
-      │
-      │ + Type: string
-      │
-      ↑
-GenericDataElement (implements all)
+```
++----------------------+  +----------------------+  +----------------------+
+|   IIdentifiable      |  |   ISearchable        |  |   IPrintable         |
+|                      |  |                      |  |                      |
+| IsIdenticalTo(       |  | Matches(type?,       |  | Print()              |
+|   type, props,       |  |   filters): bool     |  | ToDisplayString()    |
+|   identityKeys)      |  |                      |  |                      |
++----------+-----------+  +----------+-----------+  +----------+-----------+
+           |                         |                          |
+           +------------+------------+--------------------------+
+                        |
+              +---------v-----------+
+              |    IDataElement     |
+              |                     |
+              | Type: string        |
+              | Key: string         |  <-- Server-assigned
+              +---------+-----------+
+                        |
+              +---------v-----------+
+              | GenericDataElement  |  implements all
+              |                     |
+              | Owner: string       |  <-- Tracks creator
+              | Properties: Dict    |  <-- Arbitrary key-value
+              +---------------------+
 ```
 
-## IKeyIdentifiable
+### Why Three Interfaces? (V1 had two: IKeyIdentifiable + IPrintable)
 
-**Purpose**: Let each Data Element decide what makes it unique.
+V1's `IKeyIdentifiable.GetKey()` made the **element** generate its own key from a client-chosen property.
+This caused collisions (two Toyotas → same key) and key instability (changing a property changed the key).
+
+V2 separates identity into three concerns:
+
+| Interface | Who calls it | Purpose |
+|-----------|-------------|---------|
+| `IIdentifiable` | **Server** calls during `Set()` | Does incoming data match this element? (using IdentityKeys from Type schema) |
+| `ISearchable` | **Server** calls during `Search()` | Does this element match a search filter? (subset comparison) |
+| `IPrintable` | **Server** calls during `Print()` | Display this element without knowing its type |
+
+The **Server** provides the IdentityKeys (from the Type schema) to `IsIdenticalTo()`.
+The **element** doesn't decide what defines its identity — it just executes the comparison.
+This separation means the identity strategy can change (via `UpdateTypeSchema`) without modifying any element code.
+
+## IIdentifiable
+
+**Purpose**: Let the Server check if incoming data matches an existing element's identity.
 
 ```csharp
-public interface IKeyIdentifiable
+public interface IIdentifiable
 {
-    string GetKey();  // Element returns its own unique key
+    bool IsIdenticalTo(string type, Dictionary<string, string> properties, List<string> identityKeys);
 }
 ```
 
-**Why**: The Server doesn't know what properties an element has. Instead of forcing a fixed "ID" field, each element computes its own key from its own data.
+**Why the Server provides identityKeys**: The element doesn't know its own identity schema — the schema is defined per-Type at the Server level (like a DB UNIQUE constraint). The Server passes the IdentityKeys down, and the element just compares the specified properties.
 
-**Example**: A Car might use `"Car:Toyota"`, a Person might use `"Person:John"`.
+## ISearchable
+
+**Purpose**: Let the Server filter elements by partial property match.
+
+```csharp
+public interface ISearchable
+{
+    bool Matches(string? type, Dictionary<string, string> filters);
+}
+```
+
+**Why**: Search uses **subset matching** (filters ⊆ element properties). This is different from identity matching which uses **exact match on specific keys**. Same polymorphic pattern: Server calls the interface, element executes the logic.
 
 ## IPrintable
 
@@ -52,8 +91,8 @@ public interface IKeyIdentifiable
 ```csharp
 public interface IPrintable
 {
-    void Print();              // Output to console
-    string ToDisplayString();  // Return as string (for logging, transport, etc.)
+    void Print();
+    string ToDisplayString();
 }
 ```
 
@@ -64,18 +103,14 @@ public interface IPrintable
 **Purpose**: Combined interface for the DMC Server to work with.
 
 ```csharp
-public interface IDataElement : IKeyIdentifiable, IPrintable
+public interface IDataElement : IIdentifiable, ISearchable, IPrintable
 {
-    string Type { get; }  // The type name (e.g. "Car", "Person", "Animal")
+    string Type { get; }
+    string Key { get; set; }    // Server-assigned, not element-generated
 }
 ```
 
-**Why**: The Server only depends on `IDataElement`. It can:
-- Store by key (`GetKey()`)
-- Print without knowing internals (`Print()`)
-- Query the type name (`Type`)
-
-## GenericDataElement
+## GenericDataElement (V2)
 
 **Purpose**: A single class that handles ANY type of Data Element at runtime.
 
@@ -83,15 +118,17 @@ public interface IDataElement : IKeyIdentifiable, IPrintable
 public class GenericDataElement : IDataElement
 {
     string Type;                        // e.g. "Car"
-    Dictionary<string, string> Properties;  // e.g. {Make=Toyota, Year=2024}
-    string KeyProperty;                 // e.g. "Make"
+    string Key;                         // Server-assigned: "Car:1" (auto-increment)
+    string Owner;                       // Tracks creator: "alice"
+    Dictionary<string, string> Properties;  // e.g. {VIN=ABC123, Make=Toyota, Year=2024}
 }
 ```
 
 | Method | What it does |
 |--------|-------------|
-| `GetKey()` | Returns `"{Type}:{Properties[KeyProperty]}"` → e.g. `"Car:Toyota"` |
-| `Print()` | Outputs `[Car] Make=Toyota, Year=2024 (Key: Car:Toyota)` |
+| `IsIdenticalTo(type, props, idKeys)` | Compares only the IdentityKey properties (e.g., VIN) |
+| `Matches(type?, filters)` | Returns true if all filter key-values exist in Properties (subset match) |
+| `Print()` | Outputs `[Car] VIN=ABC123, Make=Toyota  (Key: Car:1 @alice)` |
 | `ToDisplayString()` | Same as Print but returns string |
 
 **Why GenericDataElement instead of specific classes (Car, Person, etc.)?**

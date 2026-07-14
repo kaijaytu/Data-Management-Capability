@@ -64,9 +64,19 @@ namespace DMC
                 Console.WriteLine($"Hardware init skipped: {ex.Message}");
             }
 
-            // Initialize DMC Server
+            // Initialize DMC Server with commit log (Kafka-style persistence)
+            // Default: ~/.dmc/dmc_commit.log (user home, always writable)
+            // Override: DMC_DATA_DIR=/var/lib/dmc ./DMC --server
+            // TODO: Production deployment should use /var/lib/dmc/ (FHS standard)
+            //       with proper ownership: sudo chown <user> /var/lib/dmc
             var server = DMCServer.Instance;
-            Console.WriteLine($"DMC Server initialized. Elements in system: {server.Count}");
+            string dataDir = Environment.GetEnvironmentVariable("DMC_DATA_DIR")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dmc");
+            Directory.CreateDirectory(dataDir);
+            string logPath = Path.Combine(dataDir, "dmc_commit.log");
+            int replayed = server.EnableCommitLog(logPath);
+            Console.WriteLine($"DMC Server initialized. Elements: {server.Count} (replayed {replayed} log entries)");
+            Console.WriteLine($"Commit log: {logPath}");
             Console.WriteLine();
 
             // Build and start gRPC host
@@ -81,6 +91,11 @@ namespace DMC
                     listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2;
                 });
             });
+
+            // Suppress noisy ASP.NET Core framework logs, keep only our custom logs
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             builder.Services.AddGrpc();
 
@@ -116,9 +131,18 @@ namespace DMC
         {
             Console.WriteLine("=== DMC Client ===");
             Console.WriteLine($"Connecting to: {address}");
-            Console.WriteLine();
 
-            var client = new DMCClient(address);
+            // Parse --client-id option
+            string clientId = "";
+            var args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--client-id" && i + 1 < args.Length)
+                    clientId = args[i + 1];
+            }
+
+            Console.WriteLine();
+            var client = new DMCClient(address, clientId);
             await client.RunInteractive();
         }
 
@@ -141,7 +165,7 @@ namespace DMC
             var server = DMCServer.Instance;
             Console.WriteLine($"DMC Server initialized. Elements in system: {server.Count}");
             Console.WriteLine();
-            Console.WriteLine("Commands: register, update, print, printall, count, quit");
+            Console.WriteLine("Commands: define-type, schema, set, search, print, printall, count, quit");
             Console.WriteLine();
 
             bool running = true;
@@ -157,11 +181,17 @@ namespace DMC
                 {
                     switch (input)
                     {
-                        case "register":
-                            HandleRegister(server);
+                        case "define-type":
+                            HandleDefineType(server);
                             break;
-                        case "update":
-                            HandleUpdate(server);
+                        case "schema":
+                            HandleGetSchema(server);
+                            break;
+                        case "set":
+                            HandleSet(server);
+                            break;
+                        case "search":
+                            HandleSearch(server);
                             break;
                         case "print":
                             HandlePrint(server);
@@ -179,7 +209,7 @@ namespace DMC
                             running = false;
                             break;
                         case "help":
-                            Console.WriteLine("Commands: register, update, print, printall, count, quit");
+                            Console.WriteLine("Commands: define-type, schema, set, search, print, printall, count, quit");
                             break;
                         default:
                             Console.WriteLine($"Unknown: '{input}'. Type 'help'.");
@@ -215,8 +245,41 @@ namespace DMC
             return props;
         }
 
-        static void HandleRegister(DMCServer server)
+        static void HandleDefineType(DMCServer server)
         {
+            Console.Write("  Type: ");
+            string? type = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(type)) return;
+
+            Console.Write("  IdentityKeys (comma-separated, e.g. Make,Model): ");
+            string? keys = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(keys)) return;
+
+            var identityKeys = keys.Split(',').Select(k => k.Trim()).Where(k => k.Length > 0).ToList();
+            bool result = server.DefineType(type, identityKeys);
+            Console.WriteLine(result
+                ? $"  Type '{type}' defined with IdentityKeys=[{string.Join(", ", identityKeys)}]"
+                : $"  Type '{type}' already defined.");
+        }
+
+        static void HandleGetSchema(DMCServer server)
+        {
+            Console.Write("  Type: ");
+            string? type = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(type)) return;
+
+            var schema = server.GetTypeSchema(type);
+            if (schema != null)
+                Console.WriteLine($"  {type}: IdentityKeys=[{string.Join(", ", schema)}]");
+            else
+                Console.WriteLine($"  Type '{type}' not defined.");
+        }
+
+        static void HandleSet(DMCServer server)
+        {
+            Console.Write("  Key (empty for new): ");
+            string? key = Console.ReadLine()?.Trim();
+
             Console.Write("  Type: ");
             string? type = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(type)) return;
@@ -224,39 +287,30 @@ namespace DMC
             var props = ReadProperties();
             if (props.Count == 0) { Console.WriteLine("  Need at least one property."); return; }
 
-            Console.Write($"  Key property [{props.Keys.First()}]: ");
-            string? keyProp = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(keyProp)) keyProp = props.Keys.First();
-            if (!props.ContainsKey(keyProp)) { Console.WriteLine($"  '{keyProp}' not found."); return; }
-
-            var element = new GenericDataElement(type, props, keyProp);
-            server.Register(element);
-            Console.WriteLine($"  Key: {element.GetKey()}");
-            Console.Write("  "); element.Print();
+            if (!string.IsNullOrEmpty(key))
+            {
+                bool result = server.Update(key, props);
+                Console.WriteLine(result ? $"  UPDATED, Key: {key}" : $"  NOT_FOUND: '{key}'");
+            }
+            else
+            {
+                var result = server.Set(type, props);
+                Console.WriteLine($"  Action: {result.Action}, Key: {result.Key}");
+            }
         }
 
-        static void HandleUpdate(DMCServer server)
+        static void HandleSearch(DMCServer server)
         {
-            Console.Write("  Key to update: ");
-            string? key = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(key)) return;
-            if (!server.Contains(key)) { Console.WriteLine($"  '{key}' not found."); return; }
-
-            Console.Write("  Type: ");
+            Console.Write("  Type (empty for all): ");
             string? type = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(type)) return;
 
-            var props = ReadProperties();
-            Console.Write($"  Key property [{props.Keys.FirstOrDefault()}]: ");
-            string? keyProp = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(keyProp)) keyProp = props.Keys.FirstOrDefault() ?? "";
+            var filters = ReadProperties();
+            var results = server.Search(
+                string.IsNullOrEmpty(type) ? null : type, filters);
 
-            var element = new GenericDataElement(type, props, keyProp);
-            if (element.GetKey() != key) { Console.WriteLine("  Key mismatch. Cancelled."); return; }
-
-            bool result = server.Update(element);
-            Console.WriteLine($"  Update: {result}");
-            if (result) { Console.Write("  "); element.Print(); }
+            Console.WriteLine($"  --- Results ({results.Count()} found) ---");
+            foreach (var element in results)
+                Console.WriteLine($"  [{element.Key}] {element.ToDisplayString()}");
         }
 
         static void HandlePrint(DMCServer server)

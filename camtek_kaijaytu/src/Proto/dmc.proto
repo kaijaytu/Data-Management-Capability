@@ -4,27 +4,38 @@ option csharp_namespace = "DMC.Grpc";
 
 package dmc;
 
-// DMC Service — full gRPC interface for Data Management Capability
+// DMC Service — V2 gRPC interface for Data Management Capability
+// Schema layer: DefineType, GetTypeSchema
+// Data layer: SetElement, Search, Print, PrintAll, BatchSet
 service DMCService {
-  // Unary: Register a single Data Element
-  rpc Register (RegisterRequest) returns (RegisterResponse);
+  // Schema: Define IdentityKeys for a Type (one-time per Type)
+  rpc DefineType (DefineTypeRequest) returns (DefineTypeResponse);
 
-  // Unary: Update an existing Data Element
-  rpc Update (UpdateRequest) returns (UpdateResponse);
+  // Schema: Get IdentityKeys for a Type
+  rpc GetTypeSchema (GetTypeSchemaRequest) returns (GetTypeSchemaResponse);
 
-  // Unary: Print a single Data Element by key
+  // Schema: Update IdentityKeys for a Type (validates existing data for collisions)
+  rpc UpdateTypeSchema (UpdateTypeSchemaRequest) returns (UpdateTypeSchemaResponse);
+
+  // Data: Set a Data Element (Server decides Create/Update)
+  rpc SetElement (SetElementRequest) returns (SetElementResponse);
+
+  // Data: Search elements by type and/or property filters
+  rpc Search (SearchRequest) returns (SearchResponse);
+
+  // Data: Print a single Data Element by key
   rpc Print (PrintRequest) returns (PrintResponse);
 
-  // Server streaming: Print all Data Elements
+  // Data: Print all Data Elements (server streaming)
   rpc PrintAll (PrintAllRequest) returns (stream DataElementMessage);
 
-  // Client streaming: Batch register multiple Data Elements
-  rpc BatchRegister (stream RegisterRequest) returns (BatchRegisterResponse);
+  // Data: Batch set multiple Data Elements (client streaming)
+  rpc BatchSet (stream SetElementRequest) returns (BatchSetResponse);
 
-  // Unary: Get element count
+  // Data: Get element count
   rpc GetCount (Empty) returns (CountResponse);
 
-  // Unary: Check if element exists
+  // Data: Check if element exists by key
   rpc Contains (ContainsRequest) returns (ContainsResponse);
 }
 
@@ -35,29 +46,86 @@ message KeyValuePair {
   string value = 2;
 }
 
-message RegisterRequest {
+// --- Schema messages ---
+
+message DefineTypeRequest {
   string type = 1;
-  repeated KeyValuePair properties = 2;
-  string key_property = 3;
+  repeated string identity_keys = 2;
 }
 
-message RegisterResponse {
+message DefineTypeResponse {
   bool success = 1;
-  string generated_key = 2;
-  string message = 3;
+  string message = 2;
 }
 
-message UpdateRequest {
+message GetTypeSchemaRequest {
+  string type = 1;
+}
+
+message GetTypeSchemaResponse {
+  bool found = 1;
+  string type = 2;
+  repeated string identity_keys = 3;
+}
+
+message UpdateTypeSchemaRequest {
+  string type = 1;
+  repeated string new_identity_keys = 2;
+}
+
+message UpdateTypeSchemaResponse {
+  bool success = 1;
+  string message = 2;
+  repeated SchemaConflict conflicts = 3;
+}
+
+message SchemaConflict {
+  string key_a = 1;
+  string key_b = 2;
+}
+
+// --- SetElement messages ---
+
+message SetElementRequest {
   string type = 1;
   repeated KeyValuePair properties = 2;
-  string key_property = 3;
+  string key = 3;           // Optional: if provided, explicit update by key
+  UpdateMode mode = 4;      // MERGE (default) or REPLACE
 }
 
-message UpdateResponse {
+enum UpdateMode {
+  MERGE = 0;     // Only update submitted properties, keep the rest
+  REPLACE = 1;   // Overwrite entire element with new properties
+}
+
+enum SetAction {
+  CREATED = 0;
+  UPDATED = 1;
+  NOT_FOUND = 2;
+}
+
+message SetElementResponse {
   bool success = 1;
   string key = 2;
-  string message = 3;
+  SetAction action = 3;
+  string message = 4;
+  string owner = 5;
 }
+
+// --- Search messages ---
+
+message SearchRequest {
+  string type = 1;                    // Optional: filter by type
+  repeated KeyValuePair filters = 2;  // Optional: filter by property subset
+  string owner = 3;                   // Optional: filter by owner
+}
+
+message SearchResponse {
+  repeated DataElementMessage results = 1;
+  int32 total_found = 2;
+}
+
+// --- Print messages ---
 
 message PrintRequest {
   string key = 1;
@@ -75,14 +143,19 @@ message DataElementMessage {
   string type = 2;
   repeated KeyValuePair properties = 3;
   string display = 4;
+  string owner = 5;
 }
 
-message BatchRegisterResponse {
+// --- Batch messages ---
+
+message BatchSetResponse {
   int32 total_received = 1;
-  int32 total_registered = 2;
+  int32 total_created = 2;
   int32 total_updated = 3;
   repeated string keys = 4;
 }
+
+// --- Utility messages ---
 
 message ContainsRequest {
   string key = 1;

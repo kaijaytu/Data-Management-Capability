@@ -2,46 +2,55 @@ namespace DMC.Common.DataElements
 {
     /// <summary>
     /// Generic Data Element that accepts any type name and arbitrary key-value properties.
-    /// Key is auto-generated from Type + first property value (or user-specified key property).
+    /// Key is assigned by the Server (auto-increment). Identity is determined by IdentityKeys (per-Type schema).
     /// Supports the Open-Closed Principle: no code change needed for new types.
     /// </summary>
     public class GenericDataElement : IDataElement
     {
         public string Type { get; }
-        public Dictionary<string, string> Properties { get; }
+        public string Key { get; set; }
+        public string Owner { get; set; }
+        public Dictionary<string, string> Properties { get; set; }
 
-        /// <summary>
-        /// The property name used as the unique identifier within this type.
-        /// If not specified, the first property value is used.
-        /// </summary>
-        public string KeyProperty { get; }
-
-        public GenericDataElement(string type, Dictionary<string, string> properties, string keyProperty = "")
+        public GenericDataElement(string type, Dictionary<string, string> properties, string key = "", string owner = "")
         {
             Type = type;
             Properties = properties;
-            KeyProperty = keyProperty;
+            Key = key;
+            Owner = owner;
         }
 
         /// <summary>
-        /// Returns a unique key based on Type + key property value.
-        /// Example: "Car:Toyota" or "Person:John"
+        /// Determines if incoming data matches this element's identity.
+        /// Only compares properties specified in identityKeys (provided by Server from Type schema).
         /// </summary>
-        public string GetKey()
+        public bool IsIdenticalTo(string type, Dictionary<string, string> properties, List<string> identityKeys)
         {
-            string keyValue;
+            if (Type != type) return false;
 
-            if (!string.IsNullOrEmpty(KeyProperty) && Properties.ContainsKey(KeyProperty))
+            foreach (var idKey in identityKeys)
             {
-                keyValue = Properties[KeyProperty];
+                if (!Properties.TryGetValue(idKey, out var myValue)) return false;
+                if (!properties.TryGetValue(idKey, out var theirValue)) return false;
+                if (myValue != theirValue) return false;
             }
-            else
-            {
-                // Default: use first property value
-                keyValue = Properties.Values.FirstOrDefault() ?? "unknown";
-            }
+            return true;
+        }
 
-            return $"{Type}:{keyValue}";
+        /// <summary>
+        /// Determines if this element matches a search filter (subset match).
+        /// </summary>
+        public bool Matches(string? type, Dictionary<string, string> filters)
+        {
+            if (!string.IsNullOrEmpty(type) && Type != type)
+                return false;
+
+            foreach (var kvp in filters)
+            {
+                if (!Properties.TryGetValue(kvp.Key, out var value) || value != kvp.Value)
+                    return false;
+            }
+            return true;
         }
 
         public void Print()
@@ -52,7 +61,8 @@ namespace DMC.Common.DataElements
         public string ToDisplayString()
         {
             var pairs = Properties.Select(p => $"{p.Key}={p.Value}");
-            return $"[{Type}] {string.Join(", ", pairs)}  (Key: {GetKey()})";
+            string ownerTag = string.IsNullOrEmpty(Owner) ? "" : $" @{Owner}";
+            return $"[{Type}] {string.Join(", ", pairs)}  (Key: {Key}{ownerTag})";
         }
     }
 }

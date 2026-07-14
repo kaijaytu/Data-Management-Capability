@@ -48,14 +48,30 @@ CPP_EXIT=$?
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: C# Concurrency Stress Tests
+# Step 2: C# DMCServer Unit Tests (no gRPC required)
 # ─────────────────────────────────────────────────────────────────────────────
 echo "==========================================="
-echo "  Step 2: C# Concurrency Stress Tests"
+echo "  Step 2: C# DMCServer Unit Tests"
+echo "==========================================="
+
+cd "$PROJECT_ROOT"
+dotnet build "$TESTS_DIR/DMC.UnitTests.csproj" --nologo -v quiet
+
+echo ""
+dotnet run --no-build --project "$TESTS_DIR/DMC.UnitTests.csproj"
+UNIT_EXIT=$?
+
+echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 3: C# Concurrency Stress Tests
+# ─────────────────────────────────────────────────────────────────────────────
+echo "==========================================="
+echo "  Step 3: C# Concurrency Stress Tests"
 echo "==========================================="
 
 cd "$TESTS_DIR"
-dotnet build --nologo -q --project DMC.Tests.csproj
+dotnet build DMC.Tests.csproj --nologo -v quiet
 
 echo ""
 dotnet run --no-build --project DMC.Tests.csproj
@@ -64,7 +80,7 @@ CSHARP_EXIT=$?
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 3: gRPC Integration Tests (requires running server)
+# Step 4: gRPC Integration Tests (requires running server)
 # ─────────────────────────────────────────────────────────────────────────────
 GRPC_EXIT=0
 DMC_PORT="${DMC_PORT:-5050}"
@@ -72,19 +88,19 @@ DMC_ADDRESS="http://localhost:$DMC_PORT"
 
 if curl -s -o /dev/null -w '' "http://localhost:$DMC_PORT" 2>/dev/null || ss -tlnp | grep -q ":$DMC_PORT"; then
     echo "==========================================="
-    echo "  Step 3: gRPC Integration Tests"
+    echo "  Step 4: gRPC Integration Tests"
     echo "  Server: $DMC_ADDRESS"
     echo "==========================================="
 
     cd "$TESTS_DIR"
-    dotnet build --nologo -q --project DMC.IntegrationTests.csproj
+    dotnet build DMC.IntegrationTests.csproj --nologo -v quiet
 
     echo ""
     dotnet run --no-build --project DMC.IntegrationTests.csproj -- "$DMC_ADDRESS"
     GRPC_EXIT=$?
 else
     echo "==========================================="
-    echo "  Step 3: gRPC Integration Tests (SKIPPED)"
+    echo "  Step 4: gRPC Integration Tests (SKIPPED)"
     echo "  No server detected on port $DMC_PORT"
     echo "  Start server first: /opt/dmc/run.sh --server --port $DMC_PORT"
     echo "==========================================="
@@ -99,11 +115,12 @@ echo "==========================================="
 echo "  Test Summary"
 echo "==========================================="
 
-if [ $CPP_EXIT -eq 0 ] && [ $CSHARP_EXIT -eq 0 ] && [ $GRPC_EXIT -eq 0 ]; then
+if [ $CPP_EXIT -eq 0 ] && [ $UNIT_EXIT -eq 0 ] && [ $CSHARP_EXIT -eq 0 ] && [ $GRPC_EXIT -eq 0 ]; then
     echo "  ALL TESTS PASSED"
     exit 0
 else
     [ $CPP_EXIT -ne 0 ] && echo "  [FAIL] C++ Fault Injection Tests (exit code: $CPP_EXIT)"
+    [ $UNIT_EXIT -ne 0 ] && echo "  [FAIL] C# DMCServer Unit Tests (exit code: $UNIT_EXIT)"
     [ $CSHARP_EXIT -ne 0 ] && echo "  [FAIL] C# Concurrency Tests (exit code: $CSHARP_EXIT)"
     [ $GRPC_EXIT -ne 0 ] && echo "  [FAIL] gRPC Integration Tests (exit code: $GRPC_EXIT)"
     exit 1

@@ -8,6 +8,11 @@
     <Nullable>enable</Nullable>
     <!-- Allow catching AccessViolationException from native code -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="HardwareLogicConcurrencyTests.cs" />
+  </ItemGroup>
 
 </Project>
