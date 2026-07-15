@@ -20,6 +20,10 @@ This repository contains the architecture, source code, and documentation for th
 
 * Singleton Pattern — Ensure all clients access the same DMC Server instance.
 * Strategy Pattern — Each Data Element implements its own Print behavior; DMC does not need to know internal details.
+* Interface Segregation (ISP) — IIdentifiable + ISearchable + IPrintable composed into IDataElement.
+* Open-Closed Principle (OCP) — GenericDataElement with Dictionary<string, string> handles any type without code changes.
+* Kafka-style Commit Log — Append-only log as source of truth; in-memory state is a derived view.
+* Bridge Pattern — HardwareBridge decouples managed C# from native C++ via P/Invoke.
 
 ### Build System
 
@@ -124,83 +128,108 @@ The DMC is a capability identified as part of a systems infrastructure. It acts 
 
 ### Interface Architecture
 
-Data Element behavior is decomposed into two focused interfaces, combined into `IDataElement`:
+Data Element behavior is decomposed into three focused interfaces, combined into `IDataElement`:
 
 ```text
-+-------------------+     +-------------------+
-| IKeyIdentifiable  |     | IPrintable        |
-+-------------------+     +-------------------+
-| + GetKey(): string|     | + Print(): void   |
-+-------------------+     | + ToDisplayString()|
-        \                 +-------------------+
-         \               /
-          v             v
-     +---------------------+
-     |    IDataElement      |
-     +---------------------+
-     | + Type : string      |
-     +---------------------+
-              ^
-              |
-     +--------+---------+
-     | GenericDataElement|
-     +------------------+
-     | + Properties      |
-     | + KeyProperty     |
-     +------------------+
++----------------------------+   +----------------------------+   +-------------------+
+| IIdentifiable              |   | ISearchable                |   | IPrintable        |
++----------------------------+   +----------------------------+   +-------------------+
+| + IsIdenticalTo(type,      |   | + Matches(type?, filters)  |   | + Print(): void   |
+|     props, identityKeys)   |   |   : bool                   |   | + ToDisplayString()|
+|   : bool                   |   +----------------------------+   +-------------------+
++----------------------------+               |                          /
+              \                              |                         /
+               +-----------+-----------------+------------------------+
+                           |
+                           v
+                  +---------------------+
+                  |    IDataElement      |
+                  +---------------------+
+                  | + Type : string      |
+                  | + Key  : string      |
+                  +---------------------+
+                           ^
+                           |
+                  +--------+-----------+
+                  | GenericDataElement  |
+                  +--------------------+
+                  | + Properties        |
+                  | + Owner             |
+                  +--------------------+
 ```
 
 | Interface | Responsibility |
 |-----------|---------------|
-| `IKeyIdentifiable` | Each element decides its own unique key via `GetKey()`. The server does not impose an ID. |
+| `IIdentifiable` | Each element knows how to compare its own identity using IdentityKeys (subset of properties defined per Type). |
+| `ISearchable` | Each element knows how to match against search filters (subset match on properties). |
 | `IPrintable` | Each element decides how to display itself via `Print()` and `ToDisplayString()`. |
-| `IDataElement` | Combines both interfaces + exposes `Type`. |
+| `IDataElement` | Combines all three interfaces + exposes `Type` and `Key`. |
 
 ### GenericDataElement
 
 A single class that accepts **any type name** and **arbitrary key-value properties**. No new class is needed for new types.
 
 ```text
-register → Type: Animal
-           Properties: Species=Dog, Name=Buddy, Age=3
-           Key property: Name
-           Generated Key: "Animal:Buddy"
+DefineType("Car", IdentityKeys=["VIN"])
+
+Set → Type: Car
+      Properties: VIN=1HGBH41JXMN109186, Make=Toyota, Model=Camry, Year=2024
+      → CREATED, Key: Car:1  (auto-increment)
+
+Set → Type: Car
+      Properties: VIN=1HGBH41JXMN109186, Color=Red
+      → UPDATED, Key: Car:1  (same VIN = same car, Color merged)
+
+Set → Type: Car
+      Properties: VIN=5YJSA1DN0DFP14555, Make=Tesla, Model=Model3
+      → CREATED, Key: Car:2  (different VIN = different car)
 ```
 
 | Feature | How it works |
 |---------|-------------|
-| Type | User-specified string (e.g. Car, Person, Animal, Bus) |
-| Properties | Arbitrary `Dictionary<string, string>` key-value pairs |
-| Key | Auto-generated as `Type:KeyPropertyValue` (e.g. `Car:Toyota`) |
-| Key property | User chooses which property is the unique identifier |
-| Print | Outputs all properties with the key: `[Car] Make=Toyota, Year=2024 (Key: Car:Toyota)` |
+| Type | User-specified string (e.g. Car, Person, Sensor, Bus) |
+| Properties | Arbitrary `Dictionary<string, string>` key-value pairs — Server never interprets data types |
+| Key | Server-generated auto-increment: `Type:N` (e.g. `Car:1`, `Car:2`) |
+| IdentityKeys | Per-Type schema defined via `DefineType()`. Server uses these to determine Create vs Update |
+| Owner | Optional client identifier, enabling multi-user tracking and search by owner |
+| Print | Outputs all properties: `[Car] VIN=1HGBH41JXMN109186, Make=Toyota  (Key: Car:1 @ClientA)` |
 
 ### Extensibility (Open-Closed Principle)
 
 To add a new Data Element type at runtime:
 
-1. Enter any type name (e.g. `Bus`, `Desktop`, `Airplane`).
-2. Enter key-value properties.
-3. Specify which property is the unique key.
+1. `DefineType("Bus", IdentityKeys=["PlateNumber"])` — declare what makes a Bus unique.
+2. `Set(type="Bus", properties={PlateNumber=ABC-1234, Route=42, Capacity=50})` — store data.
+3. Done. The Server handles Create/Update automatically via identity matching.
 
-The DMC Server requires **zero modification** — it only depends on `IDataElement.GetKey()` and `IPrintable.Print()`.
+The DMC Server requires **zero modification** — it relies on `IIdentifiable.IsIdenticalTo()` for identity matching and `IPrintable.Print()` for display. New types are handled by schema definition, not code changes.
 
 ## DMC Server Design
 
-### Data Structure
+### Data Structure (V2 — Schema Layer + Data Layer)
 
 ```text
-DMC Server
+DMC Server (Singleton)
 ├── _instance : DMCServer              (Singleton reference)
-└── _registry : Dictionary<string, IDataElement>
-                 Key = element.GetKey() (e.g. "Car:Toyota")
-                 Value = IDataElement instance
+├── _typeSchemas : Dictionary<string, List<string>>
+│                Type → IdentityKeys (per-Type schema, e.g. Car → [VIN])
+├── _typeCounters : Dictionary<string, int>
+│                Type → auto-increment counter (for key generation)
+├── _identityIndex : Dictionary<string, string>
+│                "Type\x1FVal1\x1FVal2" → Key (O(1) identity dedup lookup)
+├── _registry : Dictionary<string, IDataElement>
+│                Key (e.g. "Car:1") → IDataElement instance
+└── _commitLog : CommitLog
+                 Kafka-style append-only log (source of truth)
 ```
 
-* Uses a single `Dictionary<string, IDataElement>` as a shared data pool.
-* All Clients (modules) read and write to the same registry.
-* Key is generated by the element itself via `GetKey()` — not imposed by the server.
-* Provides O(1) lookup, insertion, and update.
+| Structure | Purpose | Why |
+|-----------|---------|-----|
+| `_typeSchemas` | Store IdentityKeys per Type | Schema defined once via `DefineType()`, enforced on every `Set()`. Like MongoDB `createIndex({unique:true})` |
+| `_identityIndex` | Fast identity dedup lookup | Without index: O(N) scan. With index: O(1) dictionary lookup |
+| `_typeCounters` | Auto-increment key generation | Keys are independent of data content (Car:1, Car:2...). Changing properties never changes the key |
+| `_registry` | Element storage | The actual data pool. Key is server-generated, value is IDataElement |
+| `_commitLog` | Persistence | Append-only JSON log. On startup, state is rebuilt by replaying the log |
 
 ### Why Shared Data Pool (Not Per-Client Isolation)
 
@@ -215,15 +244,17 @@ Per-client isolation would turn each module into an island, breaking cross-modul
 ### How DMC Knows If a Data Element Exists
 
 ```text
-Register(element):
-    key = element.GetKey()       // Element decides its own key
-    if _registry.ContainsKey(key):
-        -> Route to Update
-    else:
-        -> Add to _registry
+Set(type, properties, owner):
+    1. Validate: _typeSchemas[type] exists (DefineType must be called first)
+    2. Validate: all IdentityKeys present in properties
+    3. lock(_lock):
+       a. Build identity key: "Type\x1FIdentityVal1\x1FIdentityVal2"
+       b. Lookup _identityIndex[identityKey]
+          → Match found: UpdateProperties (merge or replace) → return UPDATED
+          → No match: GenerateKey(type) → add to _registry + _identityIndex → return CREATED
 ```
 
-The server calls `element.GetKey()` to obtain the key, then looks it up in the dictionary. The element itself determines what makes it unique (via `IKeyIdentifiable`).
+The server uses per-Type IdentityKeys (defined via `DefineType()`) to build a composite identity string, then looks it up in O(1) via the identity index. The element itself participates through `IIdentifiable.IsIdenticalTo()` for validation.
 
 ### How DMC Prints Without Knowing the Data Element
 
@@ -263,14 +294,14 @@ The following assumptions are made and validated for each design step:
 
 | # | Assumption | Justification |
 |---|-----------|---------------|
-| 1 | Each Data Element generates a globally unique key via `GetKey()`. | Key is composed of `Type:KeyPropertyValue`, ensuring uniqueness within the system. |
+| 1 | Each Type declares IdentityKeys that uniquely identify an instance within that Type. | Identity is composed from a subset of properties (e.g. VIN for Car). Server builds a composite key for O(1) dedup lookup. |
 | 2 | The system runs within a single process. | Allows in-memory Singleton pattern; if distributed, would need a service registry instead. |
 | 3 | Data Elements are not deleted, only registered and updated. | Assessment only specifies Register/Update/Print; Delete is out of scope. |
 | 4 | `Print()` outputs to console/log (text-based). | Assessment asks to "print out" without specifying serialization format. |
-| 5 | All Data Element types share a composed interface (`IKeyIdentifiable` + `IPrintable` = `IDataElement`). | Required for polymorphic key generation, print, and type-agnostic storage. |
+| 5 | All Data Element types share a composed interface (`IIdentifiable` + `ISearchable` + `IPrintable` = `IDataElement`). | Required for polymorphic identity matching, subset search, print, and type-agnostic storage. |
 | 6 | All Clients share a single data pool (no per-client isolation). | Equipment modules need cross-module visibility; assessment requires "print all Object in System". |
-| 7 | The system is thread-safe for concurrent client access. | Multiple clients may call Register/Update simultaneously; Singleton uses double-checked locking. |
-| 8 | New Data Element types are added at runtime without code changes. | `GenericDataElement` accepts any type name and arbitrary properties; no recompilation needed. |
+| 7 | The system is thread-safe for concurrent client access. | Multiple clients may call Set/Search simultaneously; all public methods use lock(_lock) for atomicity. |
+| 8 | New Data Element types are added at runtime without code changes. | `GenericDataElement` accepts any type name and arbitrary properties; `DefineType()` declares schema at runtime. |
 
 ## Features
 
@@ -315,42 +346,44 @@ The following assumptions are made and validated for each design step:
 
 ## Test Scenarios
 
-### Register Data Element
+### Register Data Element (Set — Create)
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Register new element | `GenericDataElement("MobilePhone", {Brand="Apple", Model="iPhone"}, "Brand")` | Successfully added, Key: `MobilePhone:Apple`, registry count +1 |
-| Register duplicate key | Same type + same key property value | Routed to Update, returns true |
-| Register different type | `GenericDataElement("Car", {Make="Toyota", Year="2024"}, "Make")` | Successfully added as separate entry, Key: `Car:Toyota` |
+| Register new element | `DefineType("Car", ["VIN"])` then `Set("Car", {VIN=1HGBH41JXMN109186, Make=Toyota})` | CREATED, Key: `Car:1`, registry count +1 |
+| Register same identity | `Set("Car", {VIN=1HGBH41JXMN109186, Color=Red})` | UPDATED, Key: `Car:1` (same VIN = same car, Color merged) |
+| Register different identity | `Set("Car", {VIN=5YJSA1DN0DFP14555, Make=Tesla})` | CREATED, Key: `Car:2` (different VIN = different car) |
 
 ### Update Data Element
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Update existing element | Update `MobilePhone:Apple` Brand to "Samsung" | Property updated successfully, returns true |
-| Update non-existing element | Update key `Car:Unknown` | Returns false (element not found) |
+| Update existing (merge) | `Update("Car:1", {Year=2025})` | Property added, existing properties kept |
+| Update existing (replace) | `Update("Car:1", {Make=Honda}, merge=false)` | All old properties replaced with new |
+| Update non-existing | `Update("Car:999", {Color=Blue})` | Returns false (element not found) |
 
 ### Print Data Element
 
 | Scenario | Input | Expected Result |
 |----------|-------|----------------|
-| Print single element | `Print("MobilePhone:Apple")` | Outputs: `[MobilePhone] Brand=Apple, Model=iPhone  (Key: MobilePhone:Apple)` |
+| Print single element | `Print("Car:1")` | Outputs: `[Car] VIN=1HGBH41JXMN109186, Make=Toyota  (Key: Car:1)` |
 | Print all elements | `PrintAll()` | Outputs all registered elements in sequence |
-| Print after update | `Print("MobilePhone:Apple")` after update | Reflects updated values |
+| Print after update | `Print("Car:1")` after update | Reflects updated values |
 
 ### Singleton Guarantee
 
 | Scenario | Operation | Expected Result |
 |----------|-----------|----------------|
 | Multiple clients access | Client A and B both get Instance | Same object reference (ReferenceEquals == true) |
-| Concurrent registration | Client A and B register simultaneously | Both elements stored, no data loss |
+| Concurrent Set | 100 threads call Set simultaneously | All elements stored correctly, no data loss or duplicate keys |
 
 ### Open-Closed Principle
 
 | Scenario | Operation | Expected Result |
 |----------|-----------|----------------|
-| Add new type | Create `GenericDataElement("Desktop", {...}, "Brand")` and register | DMC handles it without code change |
+| Add new type | `DefineType("Desktop", ["SerialNumber"])` then `Set("Desktop", {...})` | DMC handles it without code change |
 | Print new type | `PrintAll()` after adding Desktop | Desktop element output included |
+| Schema migration | `UpdateTypeSchema("Car", ["VIN", "PlateNumber"])` | IdentityKeys updated, existing data validated for collisions |
 
 ## Project Structure Overview
 
@@ -386,7 +419,9 @@ camtek_kaijaytu/
     ├── test_main.cpp                    # C++ fault injection tests
     ├── HardwareLogicConcurrencyTests.cs # C# concurrency stress tests
     ├── GrpcIntegrationTests.cs          # gRPC client-server integration tests
-    ├── DMC.Tests.csproj                 # .NET test project (unit/concurrency)
+    ├── DMCServerTests.cs                # Unit tests (schema, set, search, concurrency, ownership)
+    ├── DMC.Tests.csproj                 # .NET test project (concurrency)
+    ├── DMC.UnitTests.csproj             # .NET test project (unit tests)
     └── DMC.IntegrationTests.csproj      # .NET test project (integration)
 ```
 
@@ -450,8 +485,9 @@ Contains automated testing for the HardwareLogic native library.
 
 * **gRPC Integration Tests** (`GrpcIntegrationTests.cs`)
 
-  * End-to-end client-server Register, Update, Print, PrintAll, BatchRegister
-  * Server streaming, client streaming, error handling
+  * End-to-end DefineType, SetElement (identity dedup), Search, Print, PrintAll
+  * Server streaming, client streaming (BatchSet), concurrent gRPC calls
+  * Realistic scenarios: VIN-based Car, DeviceId-based Sensor, multi-user via metadata
 
 Run all tests: `./scripts/test/test.sh`
 
@@ -565,18 +601,24 @@ chmod +x build.sh
 ## Roadmap
 
 * [x] Initialize repository structure
-* [x] Design IDataElement interface and base abstractions
-* [x] Implement DMC Server with Singleton pattern
-* [x] Implement Register / Update / Print operations
+* [x] Design IDataElement interface and base abstractions (IIdentifiable + ISearchable + IPrintable)
+* [x] Implement DMC Server with Singleton pattern (V2: Schema + Data two-layer)
+* [x] Implement Set / Update / Search / Print / PrintAll operations
+* [x] Implement DefineType / GetTypeSchema / UpdateTypeSchema (Schema layer)
+* [x] Implement identity-based deduplication with O(1) index lookup
+* [x] Implement Kafka-style CommitLog persistence (append-only, compaction, replay)
+* [x] Implement multi-user ownership tracking
+* [x] Implement GenericDataElement (runtime extensible, any type)
 * [x] ~~Implement Data Element Factory~~ (replaced by GenericDataElement)
 * [ ] Implement logging subsystem
 * [ ] Implement configuration management
-* [x] Build hardware abstraction layer
+* [x] Build hardware abstraction layer (C++17 + P/Invoke Bridge)
 * [ ] Implement event dispatcher
-* [x] Integrate gRPC communication (code complete, pending RHEL verification)
+* [x] Integrate gRPC communication (10 RPCs: Unary + Server/Client Streaming)
 * [x] Add fault injection tests (C++ null pointer, buffer overflow, illegal state)
 * [x] Add concurrency stress tests (C# 100-thread parallel R/W, race conditions)
-* [x] Add integration tests for Client-Server scenarios (gRPC end-to-end)
+* [x] Add unit tests (31 tests: schema, set, search, concurrency, ownership, migration, commitlog)
+* [x] Add integration tests (20 tests: end-to-end gRPC, realistic scenarios)
 * [ ] Add CI/CD pipeline
 
 ## Notes

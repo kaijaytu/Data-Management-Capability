@@ -22,14 +22,14 @@ Protocol Buffers is Google's language-neutral serialization format. A `.proto` f
 At build time, `Grpc.Tools` reads this `.proto` file and auto-generates:
 - C# client stub (`DMCService.DMCServiceClient`)
 - C# server base class (`DMCService.DMCServiceBase`)
-- C# message classes (`RegisterRequest`, `RegisterResponse`, etc.)
+- C# message classes (`SetElementRequest`, `SearchResponse`, etc.)
 
 ```text
 dmc.proto
     ↓ Grpc.Tools (compile time)
     ├── DMCService.DMCServiceClient    ← used by DMCClient.cs
     ├── DMCService.DMCServiceBase      ← inherited by DMCGrpcService.cs
-    └── Message classes                ← RegisterRequest, DataElementMessage, etc.
+    └── Message classes                ← SetElementRequest, DefineTypeRequest, etc.
 ```
 
 ## Why .proto Instead of Writing C# Directly?
@@ -98,16 +98,29 @@ service DMCService {
 ### Message Structure Explained
 
 ```protobuf
-message RegisterRequest {
+message SetElementRequest {
   string type = 1;                      // Field number 1: element type name
   repeated KeyValuePair properties = 2; // Field number 2: list of key-value pairs
-  string key_property = 3;              // Field number 3: which property is the key
+  string key = 3;                       // Field number 3: optional, for explicit update by key
+  UpdateMode mode = 4;                  // Field number 4: MERGE (default) or REPLACE
+}
+
+enum UpdateMode {
+  MERGE = 0;     // Only update submitted properties, keep the rest
+  REPLACE = 1;   // Overwrite entire element with new properties
+}
+
+enum SetAction {
+  CREATED = 0;   // New element was created
+  UPDATED = 1;   // Existing element was updated (identity match or explicit key)
+  NOT_FOUND = 2; // Explicit key update failed — key not in registry
 }
 ```
 
 **Key concepts:**
 - `string type = 1;` — the `= 1` is a **field number**, not a default value. Used for binary encoding.
 - `repeated` — means a list/array (0 or more items)
+- `enum` — fixed set of named values (MERGE=0, REPLACE=1)
 - Field numbers must be unique within a message and should never be reused (even after deletion)
 
 ### How Messages Map to C# Code

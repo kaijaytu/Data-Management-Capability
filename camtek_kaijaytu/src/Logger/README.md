@@ -12,19 +12,24 @@ This module is reserved for future development (see [Roadmap](../../../README.md
 
 ## Current State
 
-All output currently uses `Console.WriteLine()`:
+Most output currently uses `Console.WriteLine()`. However, `DMCGrpcService.cs` already implements basic structured logging with timestamps, client-id, and peer address:
 
 ```csharp
-Console.WriteLine($"Registered {server.Count} elements.");  // in Program.cs
-Console.WriteLine(ToDisplayString());                         // in GenericDataElement.Print()
+// DMCGrpcService.cs — structured request logging
+Console.WriteLine($"  [{Timestamp}] [{GetClientId(ctx)}@{Peer(ctx)}] {action,-14} {detail}");
+
+// Program.cs — startup info
+Console.WriteLine($"DMC Server initialized. Elements: {server.Count} (replayed {replayed} log entries)");
+
+// GenericDataElement.Print() — element self-printing
+Console.WriteLine(ToDisplayString());
 ```
 
-This works for development but lacks:
-- Log levels (Debug/Info/Warning/Error)
-- Timestamps
-- File output
-- Structured logging
-- Correlation IDs for tracing
+This works for development but lacks a dedicated Logger module with:
+- Configurable log levels (Debug/Info/Warning/Error)
+- File output / log rotation
+- Formal structured logging framework
+- Correlation IDs for distributed tracing
 
 ## Planned Design
 

@@ -30,10 +30,11 @@ Version 1 (these files):
   DataElementFactory       ← Maps type name → constructor (requires registration)
 
 Version 2 (current):
-  IDataElement (IKeyIdentifiable + IPrintable)
+  IDataElement (IIdentifiable + ISearchable + IPrintable)
        ↑
   GenericDataElement        ← Handles ALL types with arbitrary properties
                               No code change needed for new types
+                              Identity determined by per-Type IdentityKeys (DefineType)
 ```
 
 ## Value as Reference

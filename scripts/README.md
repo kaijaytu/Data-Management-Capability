@@ -32,7 +32,7 @@ scripts/
 │   ├── build_rhel.sh             # Build C++ and C# for RHEL 9.2
 │   └── clean_rhel.sh             # Clean build artifacts (RHEL 9.2)
 ├── deploy/
-│   ├── deploy.bat                # Deploy (Windows)
+│   ├── deploy.bat                # Deploy (Windows) — placeholder, not yet implemented
 │   ├── deploy.sh                 # Deploy (Linux, auto-detect platform)
 │   ├── deploy_rhel.sh            # Deploy to RHEL 9.2 target directory
 │   └── undeploy_rhel.sh          # Remove deployed files (RHEL 9.2)
@@ -75,10 +75,10 @@ su - root
 | `pipeline_install.sh` | Install all system dependencies | root |
 | `pipeline_start.sh` | Build → Deploy → Run (auto switches to root for deploy) | user |
 | `pipeline_stop.sh` | Undeploy → Clean (auto switches to root for undeploy) | user |
+| `pipeline_uninstall.sh` | Remove all installed dependencies | root |
 
 > **Note**: `pipeline_start.sh` accepts optional arguments:
 > - `./scripts/pipeline_start.sh [deploy_dir] [port]` (defaults: `/opt/dmc` `5050`)
-| `pipeline_uninstall.sh` | Remove all installed dependencies | root |
 
 ### Manual Steps: Windows (Win10 / Win11)
 

@@ -2,19 +2,59 @@
 
 > **Navigation**: [Project Root](../../README.md) > [camtek_kaijaytu](../README.md) > Tests
 
-Automated test suite for the DMC HardwareLogic native library.
+Automated test suite for the DMC system: unit tests, native library tests, and gRPC integration tests.
 
 ## Files
 
 | File | Language | Purpose |
-|------|----------|---------|
+|------|----------|--------|
+| `DMCServerTests.cs` | C# | Unit tests — schema, set, search, concurrency, ownership, schema migration (25 tests) |
 | `test_main.cpp` | C++ | Fault injection tests — directly calls `libHardwareLogic.so` API |
 | `HardwareLogicConcurrencyTests.cs` | C# | Concurrency stress tests — 100 threads via P/Invoke |
-| `GrpcIntegrationTests.cs` | C# | gRPC integration tests — end-to-end client-server scenarios |
-| `DMC.Tests.csproj` | Project | .NET 8.0 project file for unit/concurrency tests |
+| `GrpcIntegrationTests.cs` | C# | gRPC integration tests — end-to-end client-server V2 scenarios (20 tests) |
+| `DMC.UnitTests.csproj` | Project | .NET 8.0 project file for unit tests (DMCServerTests) |
+| `DMC.Tests.csproj` | Project | .NET 8.0 project file for concurrency tests |
 | `DMC.IntegrationTests.csproj` | Project | .NET 8.0 project file for gRPC integration tests |
 
 ## Test Categories
+
+### Unit Tests (`DMCServerTests.cs`)
+
+Tests the DMCServer core logic directly (no network).
+
+| # | Test | Validates |
+|---|------|-----------|
+| S-01 | DefineType | Schema creation (Car→[VIN]) |
+| S-02 | DefineType duplicate | Returns false for already-defined type |
+| S-03 | DefineType validation | Rejects empty type/keys |
+| S-04 | GetTypeSchema | Returns correct IdentityKeys |
+| S-05 | Set new element | CREATED with auto-increment key |
+| S-06 | Set identity match (merge) | Same VIN → UPDATED, properties merged |
+| S-07 | Set different identity | Different VIN → CREATED as new element |
+| S-08 | Update by key (merge) | Adds new properties, keeps existing |
+| S-09 | Update by key (replace) | Replaces all properties |
+| S-10 | Update not found | Returns false |
+| S-11 | Set without schema | Throws/rejects (DefineType required first) |
+| S-12 | Set missing identity key | Rejects if IdentityKey not in properties |
+| S-13 | Search by type | Returns all elements of given type |
+| S-14 | Search by filter | Subset match on properties |
+| S-15 | Search cross-type | Filter matches across different types |
+| S-16 | Sensor merge (realistic IoT) | DeviceId-based identity, property merge |
+| S-17 | Print and PrintAll | Output format correct, Contains/Count work |
+| S-18 | Concurrent Set (100 threads) | All elements stored, no data loss |
+| S-19 | Concurrent Set same identity | Only one created, rest updated (no duplicates) |
+| S-20 | Concurrent read/write | Mixed Search + Set, no corruption |
+| S-21 | Concurrent DefineType | Multiple types defined simultaneously |
+| S-22 | Owner tracking | Elements record their creator |
+| S-23 | Search by owner | Filters elements by owner correctly |
+| S-24 | UpdateTypeSchema success | Schema migration with index rebuild |
+| S-25 | UpdateTypeSchema collision | Rejects if new keys cause identity collisions |
+| S-26 | UpdateTypeSchema missing property | Rejects if existing elements lack new key |
+| S-27 | UpdateTypeSchema undefined type | Rejects for non-existent type |
+| S-28 | Identity key with special chars | Unit separator prevents delimiter collision |
+| S-29 | CommitLog write and replay | State rebuilt correctly from log |
+| S-30 | CommitLog compaction | Only latest entry per key retained |
+| S-31 | CommitLog schema replay | DefineType entries replayed on startup |
 
 ### C++ Fault Injection Tests (`test_main.cpp`)
 
@@ -44,20 +84,30 @@ Automated test suite for the DMC HardwareLogic native library.
 
 ### gRPC Integration Tests (`GrpcIntegrationTests.cs`)
 
+End-to-end tests using realistic IdentityKeys (VIN, DeviceId, EmployeeId).
+
 | # | Test | Validates |
-|---|------|-----------|
-| T-01 | Register new element | Returns success + correct key |
-| T-02 | Register duplicate key | Routes to Update |
-| T-03 | Contains | Exists / not exists |
-| T-04 | GetCount | Count is correct |
-| T-05 | Print single element | Display string correct |
-| T-06 | Print not found | Returns Found=false |
-| T-07 | Update existing | Properties updated |
-| T-08 | Update non-existing | Returns false |
-| T-09 | PrintAll (server streaming) | Streams all elements |
-| T-10 | BatchRegister (client streaming) | Batch of 3 elements |
-| T-11 | Final count | Total ≥ 4 |
-| T-12 | Error handling | Empty key doesn't crash |
+|---|------|----------|
+| T-01 | DefineType (Car, Sensor, Person) | Schema creation with realistic IdentityKeys |
+| T-02 | DefineType duplicate | Returns failure for already-defined type |
+| T-03 | GetTypeSchema | Returns correct IdentityKeys for a type |
+| T-04 | SetElement new Car (VIN-based) | CREATED with auto-increment key |
+| T-05 | SetElement identity match (same VIN) | UPDATED — same VIN = same car, properties merged |
+| T-06 | SetElement different VIN | CREATED — different VIN = different car (even same Make+Model) |
+| T-07 | SetElement explicit update by key | Direct update by key (merge mode) |
+| T-08 | SetElement not found (invalid key) | Returns NOT_FOUND |
+| T-09 | SetElement without schema | Returns error (DefineType must be called first) |
+| T-10 | SetElement Sensor (IoT realistic data) | DeviceId-based identity, multiple properties |
+| T-11 | Search by type | Returns all elements of a given type |
+| T-12 | Search by filter (subset match) | Returns elements matching filter properties |
+| T-13 | PrintAll (server streaming) | Streams all elements back to client |
+| T-14 | BatchSet (client streaming) | Client sends multiple elements in batch |
+| T-15 | GetCount (final count) | Total count matches expected |
+| T-16 | Concurrent Set (50 unique VINs) | All 50 created without duplication |
+| T-17 | Concurrent Set (same identity race) | Only one created, rest updated — no duplicates |
+| T-18 | Concurrent read/write mix | 100 threads (50 write + 50 search), no corruption |
+| T-19 | Owner tracking | Elements record creator client-id |
+| T-20 | Search by owner | Filters elements by owner correctly |
 
 ## How to Run
 

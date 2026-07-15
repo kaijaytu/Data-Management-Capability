@@ -59,6 +59,9 @@ DMCServer (Singleton)
 | `GetAll` | `IEnumerable GetAll()` | Get all elements. Returns deep copies |
 | `Print` | `bool Print(key)` | Print single element |
 | `PrintAll` | `void PrintAll()` | Print all elements |
+| `Contains` | `bool Contains(key)` | Check if key exists in registry |
+| `Count` | `int Count { get; }` | Number of elements in registry |
+| `CompactLog` | `int CompactLog()` | Compact the commit log (keep latest per key). Returns entries removed |
 
 ### How Set Works (V2)
 
