@@ -6,9 +6,9 @@
 
 ---
 
-## Overall Score: 5.5 / 10
+## Overall Score: 6 / 10
 
-The system has a reasonable foundation in interface design, but suffers from significant issues in separation of concerns, dependency injection, and polymorphism consistency.
+The system has a reasonable foundation in interface design and makes a deliberate architectural choice to favor runtime schema over compile-time inheritance — which is appropriate given the core requirements. Main weaknesses are in separation of concerns, dependency injection, and polymorphism consistency.
 
 ---
 
@@ -57,24 +57,29 @@ The system has a reasonable foundation in interface design, but suffers from sig
 
 ---
 
-### 3. Inheritance — 5 / 10
+### 3. Inheritance — 7 / 10
+
+**Design Context:**
+
+The DMC requirements explicitly demand **runtime schema**, **dynamic type registration**, and **zero recompilation** when adding new data element types. A traditional compile-time inheritance hierarchy (`Car extends DataElement`, `Person extends DataElement`, ...) would violate these requirements — every new type would require code changes and recompilation.
+
+The flat hierarchy with a single `GenericDataElement` + runtime `DefineType()` is therefore a **deliberate and correct architectural decision**, not a design flaw.
 
 **Strengths:**
 
 - Interface inheritance is well-designed: `IDataElement : IIdentifiable, ISearchable, IPrintable`
 - `DMCGrpcService` correctly extends the gRPC-generated `DMCService.DMCServiceBase`
+- The choice of runtime composition over compile-time inheritance aligns with the core requirement of zero-recompile extensibility
+- New types are added via `DefineType("Drone", ["SerialNumber"])` at runtime — no code changes needed
 
-**Issues:**
+**Minor Issues:**
 
 | Issue | Description |
 |-------|-------------|
-| **Inheritance hierarchy is effectively empty** | Only `GenericDataElement` implements `IDataElement` in production code — the tree is flat |
-| **Design examples are out of sync** | `Car`, `Person`, `TV`, `MobilePhone` in `docs/design/examples/` use `Id` instead of `Key` and are missing `IsIdenticalTo()`, `Matches()`, `ToDisplayString()` |
-| **No Abstract Base Class** | No shared base class for common behavior (e.g., default `Matches()` implementation) |
+| **Design examples are out of sync** | `Car`, `Person`, `TV`, `MobilePhone` in `docs/design/examples/` appear to be early design explorations that were superseded by the `GenericDataElement` approach. They use `Id` instead of `Key` and are missing current interface methods. They should be marked as historical reference or removed |
 
 **Recommendation:**
-- Align design examples with the current interface, or remove outdated ones
-- Consider introducing a `DataElementBase` abstract class for shared behavior
+- Mark `docs/design/examples/` as historical design exploration, or update them to match current interfaces
 
 ---
 
@@ -184,14 +189,14 @@ The three sub-interfaces each have a clear, focused responsibility. Callers can 
 |-----------|-------|---------------------|
 | Encapsulation | 7/10 | Bridge layer is solid, but `Properties` exposes a mutable collection |
 | Abstraction | 6/10 | Interface design is sound, but `DMCServer` is a God Class |
-| Inheritance | 5/10 | Interface inheritance is good, but only one concrete implementation exists and examples are outdated |
+| Inheritance | 7/10 | Flat hierarchy is a deliberate choice for runtime schema — correct given the requirements |
 | Polymorphism | 5/10 | Structurally supported, but multiple `is` type checks break it in practice |
 | **S** — Single Responsibility | 4/10 | `DMCServer` carries too many responsibilities |
 | **O** — Open/Closed | 7/10 | `GenericDataElement` design follows OCP |
 | **L** — Liskov Substitution | 5/10 | Example classes cannot be substituted |
 | **I** — Interface Segregation | 8/10 | Three-layer interface split is clean ✓ |
 | **D** — Dependency Inversion | 3/10 | Zero DI; Singleton hard-couples the entire system |
-| **Overall** | **5.5/10** | |
+| **Overall** | **6/10** | |
 
 ---
 
@@ -200,5 +205,5 @@ The three sub-interfaces each have a clear, focused responsibility. Callers can 
 1. **Split `DMCServer`** — Extract `SchemaManager`, `DataStore`, `IdentityIndexer`, etc., each with a single responsibility
 2. **Introduce DI** — Remove Singleton, define interfaces, inject dependencies via constructors
 3. **Eliminate type checks** — Promote `Owner` and `Clone()` to the `IDataElement` interface; remove all `is GenericDataElement` checks
-4. **Sync design examples** — Update classes in `docs/design/examples/` to match the current `IDataElement` interface, or mark them as historical reference
+4. **Mark design examples as historical** — Classes in `docs/design/examples/` are early design explorations superseded by `GenericDataElement`; mark them accordingly or remove
 5. **Protect mutable state** — Expose `GenericDataElement.Properties` as `IReadOnlyDictionary` externally
